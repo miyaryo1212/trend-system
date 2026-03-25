@@ -1,0 +1,166 @@
+channels:
+  claude-code:
+    name: "Claude Code"
+    schedule: "06:00"
+    frequency: daily
+    pipeline: two-stage
+
+    # Step 0: 公式ソース
+    official_sources:
+      - name: "Anthropic Blog"
+        type: web_search
+        query: "site:anthropic.com/research OR site:anthropic.com/news Claude Code"
+      - name: "Claude Code Releases"
+        type: rss
+        url: "https://github.com/anthropics/claude-code/releases.atom"
+
+    # Step 1: 新機能名抽出 (claude -p で処理、コスト$0)
+    feature_extraction:
+      prompt: |
+        以下のRSSフィードから、直近48時間以内に発表された
+        Claude Codeの新機能・アップデート名を箇条書きで抽出してください。
+        機能の説明は1行以内で簡潔に。該当なしの場合は「なし」とだけ出力。
+        出力形式: "- 機能名: 簡潔な説明" の箇条書きのみ。前置きや補足は不要。
+
+    # Step 2: 機能ごとにX検索 (Grok x_search)
+    x_search:
+      base_query: "Claude Code"
+      prompt_template: |
+        "Claude Code {{FEATURE_NAME}}" ({{FEATURE_DESCRIPTION}})
+        に関する個人ユーザーのX投稿を検索してください。
+        除外: 公式アカウント(@claudeai, @AnthropicAI)、企業宣伝・アフィリエイト
+        品質: いいね10以上またはリポスト3以上を優先
+        期間: 過去7日間
+        言語: 日本語と英語
+        分類:
+        1. ポジティブ — 実際に使って便利だった点
+        2. ネガティブ — 不具合、制限、不満
+        3. Tips — セットアップ方法、活用例
+        出力フォーマット:
+        - 各投稿は「要旨（1〜2文）」+「@ユーザー名」の形式
+        - 最大5件
+        - 該当なしの場合は「該当なし」と記載
+
+    # 補完: コミュニティRSS
+    community_sources:
+      - name: "Zenn"
+        type: rss
+        url: "https://zenn.dev/topics/claudecode/feed"
+      - name: "Qiita"
+        type: rss
+        url: "https://qiita.com/tags/ClaudeCode/feed"
+
+  codex-openai:
+    name: "Codex / OpenAI"
+    schedule: "06:30"
+    frequency: daily
+    pipeline: two-stage
+
+    official_sources:
+      - name: "OpenAI Blog"
+        type: web_search
+        query: "site:openai.com/blog new release"
+
+    feature_extraction:
+      prompt: |
+        以下のデータから、直近48時間以内に発表された
+        OpenAI / Codexの新機能・アップデート名を箇条書きで抽出してください。
+        機能の説明は1行以内で簡潔に。該当なしの場合は「なし」とだけ出力。
+        出力形式: "- 機能名: 簡潔な説明" の箇条書きのみ。前置きや補足は不要。
+
+    x_search:
+      base_query: "Codex CLI OR OpenAI"
+      prompt_template: |
+        "{{FEATURE_NAME}}" ({{FEATURE_DESCRIPTION}})
+        に関する個人ユーザーのX投稿を検索してください。
+        除外: 公式アカウント(@OpenAI)、企業宣伝・アフィリエイト
+        品質: いいね10以上またはリポスト3以上を優先
+        期間: 過去7日間
+        言語: 日本語と英語
+        分類: ポジティブ/ネガティブ/Tips
+        各投稿は要旨+@ユーザー名。最大5件。該当なしは「該当なし」。
+
+    community_sources:
+      - name: "Zenn"
+        type: rss
+        url: "https://zenn.dev/topics/openai/feed"
+      - name: "Qiita"
+        type: rss
+        url: "https://qiita.com/tags/OpenAI/feed"
+
+  ai-trends:
+    name: "生成AIトレンド総合"
+    schedule: "07:00"
+    frequency: daily
+    pipeline: two-stage
+
+    official_sources:
+      - name: "Anthropic Blog"
+        type: web_search
+        query: "site:anthropic.com/research OR site:anthropic.com/news 生成AI"
+      - name: "OpenAI Blog"
+        type: web_search
+        query: "site:openai.com/blog new release"
+
+    # CH3ではfeature_extractionの粒度を「話題・トピック」に変更
+    feature_extraction:
+      prompt: |
+        以下のデータから、直近48時間以内に話題になった
+        生成AI関連の主要なトピック・ニュースを箇条書きで抽出してください。
+        各項目は1行以内で簡潔に。該当なしの場合は「なし」とだけ出力。
+        出力形式: "- トピック名: 簡潔な説明" の箇条書きのみ。前置きや補足は不要。
+
+    x_search:
+      base_query: "生成AI OR LLM"
+      prompt_template: |
+        "{{FEATURE_NAME}}" ({{FEATURE_DESCRIPTION}})
+        に関する個人ユーザーのX投稿を検索してください。
+        除外: 企業宣伝・アフィリエイト
+        品質: いいね10以上優先
+        期間: 過去7日間
+        言語: 日本語
+        分類: ポジティブ/ネガティブ/Tips
+        各投稿は要旨+@ユーザー名。最大5件。該当なしは「該当なし」。
+
+    community_sources:
+      - name: "Zenn トレンド"
+        type: rss
+        url: "https://zenn.dev/feed"
+      - name: "Qiita トレンド"
+        type: rss
+        url: "https://qiita.com/popular-items/feed.atom"
+
+  github-trending:
+    name: "GitHub急成長リポ"
+    schedule: "08:00"
+    frequency: weekly_sunday
+    pipeline: two-stage
+
+    official_sources:
+      - name: "GitHub Trending 全言語"
+        type: rss
+        url: "https://mshibanami.github.io/GitHubTrendingRSS/daily/all.xml"
+      - name: "GitHub Trending Python"
+        type: rss
+        url: "https://mshibanami.github.io/GitHubTrendingRSS/daily/python.xml"
+      - name: "GitHub Trending TypeScript"
+        type: rss
+        url: "https://mshibanami.github.io/GitHubTrendingRSS/daily/typescript.xml"
+
+    feature_extraction:
+      prompt: |
+        以下のGitHub Trendingデータから、AI/LLM関連で注目すべき
+        リポジトリを箇条書きで抽出してください。
+        各項目はリポ名と概要を1行以内で。該当なしの場合は「なし」とだけ出力。
+        出力形式: "- owner/repo: 簡潔な説明" の箇条書きのみ。
+
+    x_search:
+      base_query: "GitHub"
+      prompt_template: |
+        "{{FEATURE_NAME}}" ({{FEATURE_DESCRIPTION}})
+        に関するX投稿を検索してください。
+        期間: 過去7日間
+        分類: 注目ポイント/実際の使用例/批評
+        各投稿は要旨+@ユーザー名。最大5件。該当なしは「該当なし」。
+
+    community_sources: []

@@ -1,0 +1,10 @@
+[Unit]
+Description=CH2 Codex/OpenAI trend report (daily 06:30)
+
+[Timer]
+OnCalendar=*-*-* 06:30:00
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

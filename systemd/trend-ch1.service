@@ -1,0 +1,14 @@
+[Unit]
+Description=Run CH1 Claude Code trend report
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=miyaryo
+WorkingDirectory=/home/miyaryo/project/work/tamago/trend-system
+EnvironmentFile=/home/miyaryo/.env.agent
+ExecStart=/home/miyaryo/project/work/tamago/trend-system/scripts/run.sh claude-code
+StandardOutput=append:/home/miyaryo/project/work/tamago/trend-system/logs/trend-report.log
+StandardError=append:/home/miyaryo/project/work/tamago/trend-system/logs/trend-report.log
+TimeoutStartSec=1800
