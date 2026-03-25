@@ -1,5 +1,5 @@
 [Unit]
-Description=CH1 Claude Code trend report (daily 06:00)
+Description=CH1 Claude / Anthropic trend report (daily 06:00)
 
 [Timer]
 OnCalendar=*-*-* 06:00:00

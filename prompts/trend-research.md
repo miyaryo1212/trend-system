@@ -68,7 +68,7 @@
 
 ```markdown
 ---
-title: "{{CHANNEL_NAME}} - {{DATE}}"
+title: "その日のレポート内容を一言で要約したタイトル（30字以内）"
 channel: "{{CHANNEL_NAME}}"
 channelId: "{{CHANNEL_ID}}"
 date: {{DATE}}

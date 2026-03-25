@@ -4,11 +4,13 @@ set -euo pipefail
 ##############################################################################
 # run.sh — トレンド調査レポート生成 (2段階パイプライン)
 #
-# Usage: ./scripts/run.sh <channel-id>
-#   例: ./scripts/run.sh claude-code
-#       ./scripts/run.sh codex-openai
-#       ./scripts/run.sh ai-trends
-#       ./scripts/run.sh github-trending
+# Usage: ./scripts/run.sh [--dry-run] <channel-id>
+#   例: ./scripts/run.sh claude-anthropic
+#       ./scripts/run.sh --dry-run codex-openai
+#
+# Options:
+#   --dry-run  Step 0-2 を実行し、収集データをコンソールに出力して終了
+#              (レポート生成・git push は行わない)
 #
 # Pipeline:
 #   Step 0: RSSフィード取得 (curl)
@@ -35,9 +37,15 @@ CONFIG_FILE="${SYSTEM_DIR}/config/keywords.yml"
 
 # ---- 引数チェック ----
 
+DRY_RUN=false
+if [[ "${1:-}" == "--dry-run" ]]; then
+    DRY_RUN=true
+    shift
+fi
+
 CHANNEL="${1:-}"
 if [[ -z "$CHANNEL" ]]; then
-    echo "Usage: $0 <channel-id>" >&2
+    echo "Usage: $0 [--dry-run] <channel-id>" >&2
     echo "Available channels:" >&2
     yq '.channels | keys | .[]' "$CONFIG_FILE" >&2
     exit 1
@@ -198,7 +206,7 @@ render_template "${TMPDIR}/step1_template.md" "${TMPDIR}/step1_prompt.md" \
 log "  Calling claude -p for feature extraction..."
 claude -p \
     --max-turns 6 \
-    --allowedTools "Read" "Write" "Bash(curl:*)" \
+    --allowedTools "Read" "Write" "Bash(curl:*)" "WebSearch" "WebFetch" \
     < "${TMPDIR}/step1_prompt.md" \
     2>> "$LOG_FILE" || true
 
@@ -280,6 +288,32 @@ fi
 
 echo "$X_SEARCH_RESULTS" > "${TMPDIR}/x_search_results.txt"
 
+# ---- dry-run: 収集データを出力して終了 ----
+
+if [[ "$DRY_RUN" == true ]]; then
+    echo ""
+    echo "========== DRY RUN: ${CHANNEL_NAME} (${DATE}) =========="
+    echo ""
+    echo "--- Features (Step 1) ---"
+    cat "$FEATURES_PATH"
+    echo ""
+    echo "--- X Search Results (Step 2) ---"
+    cat "${TMPDIR}/x_search_results.txt"
+    echo ""
+    echo "--- Official RSS (${#OFFICIAL_RSS} chars) ---"
+    echo "$OFFICIAL_RSS" | head -50
+    echo ""
+    echo "--- Community RSS (${#COMMUNITY_RSS} chars) ---"
+    echo "$COMMUNITY_RSS" | head -50
+    echo ""
+    echo "--- Web Search Queries ---"
+    cat "${TMPDIR}/web_search_queries.txt"
+    echo ""
+    echo "========== END DRY RUN =========="
+    log "=== Dry run complete ==="
+    exit 0
+fi
+
 ##############################################################################
 # Step 3: 最終レポート生成 (claude -p)
 ##############################################################################
@@ -321,7 +355,7 @@ render_template "${TMPDIR}/step3_template.md" "${TMPDIR}/step3_prompt.md" \
 log "  Calling claude -p for report generation..."
 claude -p \
     --max-turns 15 \
-    --allowedTools "Read" "Write" "Bash(curl:*)" \
+    --allowedTools "Read" "Write" "Bash(curl:*)" "WebSearch" "WebFetch" \
     < "${TMPDIR}/step3_prompt.md" \
     2>> "$LOG_FILE"
 

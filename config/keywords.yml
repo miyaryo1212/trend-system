@@ -1,6 +1,6 @@
 channels:
-  claude-code:
-    name: "Claude Code"
+  claude-anthropic:
+    name: "Claude / Anthropic"
     schedule: "06:00"
     frequency: daily
     pipeline: two-stage
@@ -9,7 +9,7 @@ channels:
     official_sources:
       - name: "Anthropic Blog"
         type: web_search
-        query: "site:anthropic.com/research OR site:anthropic.com/news Claude Code"
+        query: "site:anthropic.com/news OR site:anthropic.com/research Claude"
       - name: "Claude Code Releases"
         type: rss
         url: "https://github.com/anthropics/claude-code/releases.atom"
@@ -17,17 +17,21 @@ channels:
     # Step 1: 新機能名抽出 (claude -p で処理、コスト$0)
     feature_extraction:
       prompt: |
-        以下のRSSフィードから、直近48時間以内に発表された
-        Claude Codeの新機能・アップデート名を箇条書きで抽出してください。
-        機能の説明は1行以内で簡潔に。該当なしの場合は「なし」とだけ出力。
-        出力形式: "- 機能名: 簡潔な説明" の箇条書きのみ。前置きや補足は不要。
+        以下のデータから、直近48時間以内に発表された
+        Anthropic / Claude関連の新機能・アップデート名を箇条書きで抽出してください。
+        対象: Claude Code, Claude Cowork, Claude Security, Claude API, Claude.ai,
+        その他Anthropicが発表した新プロダクト・機能すべて。
+        機能の説明は1行以内で簡潔に。どのプロダクトかも明記すること。
+        該当なしの場合は「なし」とだけ出力。
+        出力形式: "- [プロダクト名] 機能名: 簡潔な説明" の箇条書きのみ。前置きや補足は不要。
 
     # Step 2: 機能ごとにX検索 (Grok x_search)
     x_search:
-      base_query: "Claude Code"
+      base_query: "Claude AI OR Anthropic"
       prompt_template: |
-        "Claude Code {{FEATURE_NAME}}" ({{FEATURE_DESCRIPTION}})
+        "{{FEATURE_NAME}}" ({{FEATURE_DESCRIPTION}})
         に関する個人ユーザーのX投稿を検索してください。
+        検索キーワード: ("Claude AI" OR "Anthropic") AND "{{FEATURE_NAME}}"
         除外: 公式アカウント(@claudeai, @AnthropicAI)、企業宣伝・アフィリエイト
         品質: いいね10以上またはリポスト3以上を優先
         期間: 過去7日間
@@ -43,12 +47,21 @@ channels:
 
     # 補完: コミュニティRSS
     community_sources:
-      - name: "Zenn"
+      - name: "Zenn (Claude Code)"
         type: rss
         url: "https://zenn.dev/topics/claudecode/feed"
-      - name: "Qiita"
+      - name: "Zenn (Claude)"
+        type: rss
+        url: "https://zenn.dev/topics/claude/feed"
+      - name: "Zenn (Anthropic)"
+        type: rss
+        url: "https://zenn.dev/topics/anthropic/feed"
+      - name: "Qiita (Claude Code)"
         type: rss
         url: "https://qiita.com/tags/ClaudeCode/feed"
+      - name: "Qiita (Claude)"
+        type: rss
+        url: "https://qiita.com/tags/Claude/feed"
 
   codex-openai:
     name: "Codex / OpenAI"
@@ -58,8 +71,11 @@ channels:
 
     official_sources:
       - name: "OpenAI Blog"
-        type: web_search
-        query: "site:openai.com/blog new release"
+        type: rss
+        url: "https://openai.com/blog/rss.xml"
+      - name: "Codex CLI Releases"
+        type: rss
+        url: "https://github.com/openai/codex/releases.atom"
 
     feature_extraction:
       prompt: |
@@ -99,8 +115,8 @@ channels:
         type: web_search
         query: "site:anthropic.com/research OR site:anthropic.com/news 生成AI"
       - name: "OpenAI Blog"
-        type: web_search
-        query: "site:openai.com/blog new release"
+        type: rss
+        url: "https://openai.com/blog/rss.xml"
 
     # CH3ではfeature_extractionの粒度を「話題・トピック」に変更
     feature_extraction:
