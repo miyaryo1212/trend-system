@@ -8,6 +8,7 @@ Type=oneshot
 User=__USER__
 WorkingDirectory=__SYSTEM_DIR__
 EnvironmentFile=__HOME__/.env.agent
+Environment="PATH=__HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin:/snap/bin"
 ExecStart=__SYSTEM_DIR__/scripts/run.sh ai-trends
 StandardOutput=append:__SYSTEM_DIR__/logs/trend-report.log
 StandardError=append:__SYSTEM_DIR__/logs/trend-report.log
