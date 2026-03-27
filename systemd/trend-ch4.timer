@@ -1,0 +1,10 @@
+[Unit]
+Description=CH4 GitHub Trending trend report (Sun 08:00)
+
+[Timer]
+OnCalendar=Sun *-*-* 08:00:00
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target
