@@ -69,6 +69,8 @@
 ```markdown
 ---
 title: "その日のレポート内容を一言で要約したタイトル（30字以内）"
+summary: "レポート全体の要約（2〜3文、100字程度）"
+importance: 3
 channel: "{{CHANNEL_NAME}}"
 channelId: "{{CHANNEL_ID}}"
 date: {{DATE}}
@@ -111,3 +113,4 @@ features:
 - 前回レポートと重複する情報は「前回から継続」と注記し、新規情報を目立たせる
 - frontmatterのfeaturesには、Step 1で抽出された機能・トピック名を列挙する
 - 出力はMarkdownファイルへの Write のみ。説明文やコメントは不要
+- frontmatterのimportanceは注目度（1〜5の整数）。基準: 1=特筆なし、2=小規模更新、3=通常のアップデート、4=大きな機能追加や業界的注目、5=歴史的発表・パラダイムシフト級
