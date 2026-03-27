@@ -1,8 +1,8 @@
 [Unit]
-Description=CH4 GitHub Trending trend report (Sun 08:00)
+Description=CH4 GitHub Trending trend report (Mon 08:00)
 
 [Timer]
-OnCalendar=Sun *-*-* 08:00:00
+OnCalendar=Mon *-*-* 08:00:00
 Persistent=true
 RandomizedDelaySec=120
 

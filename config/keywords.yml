@@ -149,7 +149,7 @@ channels:
   github-trending:
     name: "GitHub急成長リポ"
     schedule: "08:00"
-    frequency: weekly_sunday
+    frequency: weekly_monday
     pipeline: two-stage
 
     official_sources:

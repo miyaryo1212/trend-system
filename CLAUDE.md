@@ -46,7 +46,7 @@ systemd timer → scripts/run.sh <channel-id>
 | CH1 | `run.sh claude-anthropic` | Claude / Anthropic | 毎日 6:00    |
 | CH2 | `run.sh codex-openai`     | Codex / OpenAI     | 毎日 6:30    |
 | CH3 | `run.sh ai-trends`        | 生成AIトレンド総合 | 毎日 7:00    |
-| CH4 | `run.sh github-trending`  | GitHub急成長リポ   | 日曜 8:00    |
+| CH4 | `run.sh github-trending`  | GitHub急成長リポ   | 月曜 8:00    |
 
 各レポートは2層構造: **公式アップデート(ファクト)** + **コミュニティの反応(オピニオン)**
 

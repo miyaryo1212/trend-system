@@ -130,7 +130,7 @@ systemd timer (毎日、チャネルごとに時間をずらす)
 | 反応 | Qiita トレンド | RSS `https://qiita.com/popular-items/feed.atom` |
 | 話題 | Skills/Agents | Grok MCP + web search `"MCP server" OR "Claude skill" trending` |
 
-### CH4: GitHub急成長リポ (日曜のみ、安定後に追加)
+### CH4: GitHub急成長リポ (月曜のみ、安定後に追加)
 
 | ソース | 取得方法 |
 |--------|---------|
