@@ -380,6 +380,7 @@ log "[Step 4] Publishing..."
 
 # git commit & push
 cd "$REPORTS_DIR"
+git pull --rebase origin main 2>> "$LOG_FILE" || log "  WARNING: git pull --rebase failed"
 git add -A
 if git diff --cached --quiet; then
     log "  No changes to commit"
