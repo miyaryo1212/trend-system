@@ -180,3 +180,39 @@ channels:
         各投稿は要旨+@ユーザー名。最大5件。該当なしは「該当なし」。
 
     community_sources: []
+
+  academia:
+    name: "LLM/NLP最新論文"
+    schedule: "07:30"
+    frequency: daily
+    pipeline: two-stage
+
+    official_sources:
+      - name: "Hugging Face Daily Papers"
+        type: json_api
+        url: "https://huggingface.co/api/daily_papers"
+      - name: "arXiv cs.CL (計算言語学)"
+        type: rss
+        url: "https://export.arxiv.org/rss/cs.CL"
+      - name: "arXiv cs.AI (人工知能)"
+        type: rss
+        url: "https://export.arxiv.org/rss/cs.AI"
+      - name: "arXiv cs.LG (機械学習)"
+        type: rss
+        url: "https://export.arxiv.org/rss/cs.LG"
+
+    feature_extraction:
+      prompt: |
+        以下のデータから、直近24時間以内に公開された
+        LLM・NLP・機械学習/深層学習に関する注目論文を箇条書きで抽出してください。
+        対象分野: 大規模言語モデル、自然言語処理、機械学習、深層学習、
+        およびこれらの応用（コード生成、マルチモーダル、強化学習、アライメント等）。
+        選定基準: 新規性、影響度、実用性の高いものを優先（最大10件）。
+        Hugging Face Daily Papersで上位にある論文は優先的に含めること。
+        該当なしの場合は「なし」とだけ出力。
+        出力形式: "- 論文タイトル: 一行の概要説明" の箇条書きのみ。前置きや補足は不要。
+
+    x_search:
+      enabled: false
+
+    community_sources: []

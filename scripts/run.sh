@@ -108,6 +108,30 @@ fetch_rss() {
     head -c "$max_size" "$tmpfile"
 }
 
+fetch_json_api() {
+    local url="$1"
+    local name="$2"
+    local max_size="${3:-80000}"
+
+    log "  JSON API: ${name}"
+    local tmpfile="${TMPDIR}/api_$(date +%s%N).json"
+    if ! curl -sL --max-time 30 -o "$tmpfile" "$url" 2>/dev/null; then
+        log "  WARNING: Failed to fetch ${name}"
+        echo "(取得失敗: ${name})"
+        return
+    fi
+
+    if [[ ! -s "$tmpfile" ]]; then
+        log "  WARNING: Empty response from ${name}"
+        echo "(取得失敗: ${name})"
+        return
+    fi
+
+    # JSONを読みやすい形式に変換 (タイトル、著者、概要)
+    jq -r '.[] | "Title: \(.paper.title)\nAuthors: \(.paper.authors // [] | map(.name // .user // "") | join(", "))\nSummary: \(.paper.summary // "N/A" | .[0:300])\nUpvotes: \(.paper.upvotes // 0)\n"' \
+        "$tmpfile" 2>/dev/null | head -c "$max_size" || head -c "$max_size" "$tmpfile"
+}
+
 # テンプレートのプレースホルダーを置換するヘルパー
 render_template() {
     local template_file="$1"
@@ -151,6 +175,12 @@ for ((i = 0; i < official_count; i++)); do
         OFFICIAL_RSS+="
 --- ${src_name} ---
 $(fetch_rss "$src_url" "$src_name")
+"
+    elif [[ "$src_type" == "json_api" ]]; then
+        src_url="$(yq -r ".channels.${CHANNEL}.official_sources[${i}].url" "$CONFIG_FILE")"
+        OFFICIAL_RSS+="
+--- ${src_name} ---
+$(fetch_json_api "$src_url" "$src_name")
 "
     elif [[ "$src_type" == "web_search" ]]; then
         src_query="$(yq -r ".channels.${CHANNEL}.official_sources[${i}].query" "$CONFIG_FILE")"
@@ -227,7 +257,13 @@ log "[Step 2] Searching X/Twitter per feature..."
 
 X_SEARCH_RESULTS=""
 
-if [[ "$FEATURES" == "なし" || -z "$FEATURES" ]]; then
+# X検索が無効化されているチャネルはスキップ
+X_SEARCH_ENABLED="$(yq -r ".channels.${CHANNEL}.x_search.enabled" "$CONFIG_FILE")"
+[[ "$X_SEARCH_ENABLED" == "null" ]] && X_SEARCH_ENABLED="true"
+if [[ "$X_SEARCH_ENABLED" == "false" ]]; then
+    log "  X search disabled for this channel, skipping"
+    X_SEARCH_RESULTS="(X検索無効 — スキップ)"
+elif [[ "$FEATURES" == "なし" || -z "$FEATURES" ]]; then
     log "  No features to search, skipping X search"
     X_SEARCH_RESULTS="(新機能なし — X検索スキップ)"
 elif [[ -z "${XAI_API_KEY:-}" ]]; then
@@ -333,8 +369,12 @@ else
     echo "(前回レポートなし — 初回生成)" > "${TMPDIR}/previous_report.txt"
 fi
 
-# プロンプト構築
-cat "${SYSTEM_DIR}/prompts/trend-research.md" > "${TMPDIR}/step3_template.md"
+# プロンプト構築 (チャネル専用テンプレートがあればそちらを使用)
+STEP3_TEMPLATE="${SYSTEM_DIR}/prompts/trend-research-${CHANNEL}.md"
+if [[ ! -f "$STEP3_TEMPLATE" ]]; then
+    STEP3_TEMPLATE="${SYSTEM_DIR}/prompts/trend-research.md"
+fi
+cat "$STEP3_TEMPLATE" > "${TMPDIR}/step3_template.md"
 
 echo "$CHANNEL_NAME" > "${TMPDIR}/val_channel_name.txt"
 echo "$CHANNEL" > "${TMPDIR}/val_channel_id.txt"

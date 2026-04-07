@@ -1,0 +1,10 @@
+[Unit]
+Description=CH5 LLM/NLP academia trend report (daily 07:30)
+
+[Timer]
+OnCalendar=*-*-* 07:30:00
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

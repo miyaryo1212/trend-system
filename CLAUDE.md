@@ -22,6 +22,7 @@ systemd timer → scripts/run.sh <channel-id>
   ├→ [Step 0] RSSフィード取得 (curl)
   │    - config/keywords.yml の official_sources / community_sources
   │    - web_search 型ソースはクエリとしてStep 1に渡す
+  │    - json_api 型ソースはJSONを整形して取得 (HF Daily Papers等)
   │
   ├→ [Step 1] 新機能・トピック抽出 (claude -p, Max Plan枠内)
   │    - prompts/feature-extraction.md + RSSデータ
@@ -30,10 +31,12 @@ systemd timer → scripts/run.sh <channel-id>
   ├→ [Step 2] 機能ごとにX検索 (xAI Grok API, ~$0.02/機能)
   │    - features.txt の各行に対して x_search
   │    - 新機能なしの日はスキップ ($0)
+  │    - x_search.enabled: false のチャネルはスキップ (CH5等)
   │    → x_search_results.txt
   │
   ├→ [Step 3] 最終レポート生成 (claude -p, Max Plan枠内)
-  │    - prompts/trend-research.md + 全データ
+  │    - prompts/trend-research[-{channel}].md + 全データ
+  │    - チャネル専用テンプレートがあればそちらを優先
   │    → trend-reports/src/content/reports/YYYY-MM-DD-channel.md
   │
   └→ [Step 4] git push → GitHub Actions → Astro build → Netlify deploy
@@ -47,8 +50,10 @@ systemd timer → scripts/run.sh <channel-id>
 | CH2 | `run.sh codex-openai`     | Codex / OpenAI     | 毎日 6:30    |
 | CH3 | `run.sh ai-trends`        | 生成AIトレンド総合 | 毎日 7:00    |
 | CH4 | `run.sh github-trending`  | GitHub急成長リポ   | 月曜 8:00    |
+| CH5 | `run.sh academia`         | LLM/NLP最新論文    | 毎日 7:30    |
 
-各レポートは2層構造: **公式アップデート(ファクト)** + **コミュニティの反応(オピニオン)**
+CH1-CH4は2層構造: **公式アップデート(ファクト)** + **コミュニティの反応(オピニオン)**
+CH5は学術論文特化: **注目論文サマリー** + **分野別の動向** (X検索なし、専用テンプレート使用)
 
 ### X/Twitter検索
 
@@ -71,11 +76,12 @@ trend-system/
 │   ├── run.sh               ← メイン実行スクリプト (2段階パイプライン)
 │   └── setup-systemd.sh     ← systemdユニットインストーラ
 ├── prompts/
-│   ├── feature-extraction.md ← Step 1: 機能名抽出プロンプト
-│   └── trend-research.md    ← Step 3: 最終レポート生成プロンプト
+│   ├── feature-extraction.md          ← Step 1: 機能名抽出プロンプト
+│   ├── trend-research.md              ← Step 3: 最終レポート生成プロンプト (デフォルト)
+│   └── trend-research-academia.md     ← Step 3: 学術論文レポート生成プロンプト (CH5用)
 ├── config/
 │   └── keywords.yml          ← チャネル・ソース・プロンプト定義
-├── systemd/                  ← timer/service定義 (CH1-CH3)
+├── systemd/                  ← timer/service定義 (CH1-CH5)
 ├── docs/                     ← 設計ドキュメント
 ├── logs/                     ← 実行ログ (.gitignore)
 └── .env.local                ← 環境変数 (.gitignore)
