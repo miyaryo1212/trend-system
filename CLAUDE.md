@@ -104,7 +104,7 @@ trend-reports/ (別リポジトリ)
 ```bash
 TREND_SYSTEM_DIR="${HOME}/project/work/tamago/trend-system"  # 開発環境
 TREND_REPORTS_DIR="${HOME}/project/work/tamago/trend-reports" # 開発環境
-# 本番: ${HOME}/repo/trend-system, ${HOME}/repo/trend-reports
+# 本番: ${HOME}/deploy/trend-system, ${HOME}/deploy/trend-reports
 XAI_API_KEY="xai-..."
 ```
 
