@@ -7,9 +7,11 @@ channels:
 
     # Step 0: 公式ソース
     official_sources:
-      - name: "Anthropic Blog"
-        type: web_search
-        query: "site:anthropic.com/news OR site:anthropic.com/research Claude"
+      - name: "Anthropic Sitemap"
+        type: sitemap
+        urls:
+          - "https://www.anthropic.com/sitemap.xml"
+        exclude_patterns: "careers|events|unsubscribe|supported-countries|candidate-|interviewer"
       - name: "Claude Code Releases"
         type: rss
         url: "https://github.com/anthropics/claude-code/releases.atom"
@@ -70,9 +72,14 @@ channels:
     pipeline: two-stage
 
     official_sources:
-      - name: "OpenAI Blog"
-        type: rss
-        url: "https://openai.com/blog/rss.xml"
+      - name: "OpenAI Sitemap"
+        type: sitemap
+        urls:
+          - "https://openai.com/sitemap.xml/product/"
+          - "https://openai.com/sitemap.xml/release/"
+          - "https://openai.com/sitemap.xml/research/"
+          - "https://openai.com/sitemap.xml/engineering/"
+        exclude_patterns: ""
       - name: "Codex CLI Releases"
         type: rss
         url: "https://github.com/openai/codex/releases.atom"
@@ -111,12 +118,18 @@ channels:
     pipeline: two-stage
 
     official_sources:
-      - name: "Anthropic Blog"
-        type: web_search
-        query: "site:anthropic.com/research OR site:anthropic.com/news 生成AI"
-      - name: "OpenAI Blog"
-        type: rss
-        url: "https://openai.com/blog/rss.xml"
+      - name: "Anthropic Sitemap"
+        type: sitemap
+        urls:
+          - "https://www.anthropic.com/sitemap.xml"
+        exclude_patterns: "careers|events|unsubscribe|supported-countries|candidate-|interviewer"
+      - name: "OpenAI Sitemap"
+        type: sitemap
+        urls:
+          - "https://openai.com/sitemap.xml/product/"
+          - "https://openai.com/sitemap.xml/release/"
+          - "https://openai.com/sitemap.xml/research/"
+        exclude_patterns: ""
 
     # CH3ではfeature_extractionの粒度を「話題・トピック」に変更
     feature_extraction:

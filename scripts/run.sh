@@ -86,6 +86,76 @@ log "=== Start: ${CHANNEL_NAME} (${CHANNEL}) ==="
 
 # ---- ユーティリティ関数 ----
 
+fetch_sitemap_diff() {
+    local name="$1"       # キャッシュキー (例: "anthropic", "openai-product")
+    local urls="$2"       # 改行区切りのサイトマップURL
+    local exclude="$3"    # grep -E 除外パターン (空文字なら除外なし)
+
+    local cache_dir="${SYSTEM_DIR}/cache/sitemap"
+    local cache_file="${cache_dir}/${name}.tsv"
+    local current_file="${TMPDIR}/sitemap_${name}_current.tsv"
+
+    mkdir -p "$cache_dir"
+
+    # 全サイトマップからURL+lastmodペアを抽出
+    > "$current_file"
+    while IFS= read -r sitemap_url; do
+        [[ -z "$sitemap_url" ]] && continue
+        curl -sL --max-time 15 "$sitemap_url" 2>/dev/null | \
+            python3 -c "
+import sys, xml.etree.ElementTree as ET
+try:
+    tree = ET.parse(sys.stdin)
+    ns = {'s': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
+    for url_elem in tree.findall('.//s:url', ns):
+        loc = url_elem.find('s:loc', ns)
+        lastmod = url_elem.find('s:lastmod', ns)
+        if loc is not None:
+            print(f'{loc.text}\t{lastmod.text if lastmod is not None else \"\"}')
+except Exception:
+    pass
+" >> "$current_file" 2>/dev/null || true
+    done <<< "$urls"
+
+    # 多言語版を除外 (OpenAIの /ja-JP/ 等)
+    grep -vE '/[a-z]{2}-[A-Z]{2}/' "$current_file" > "${current_file}.tmp" 2>/dev/null \
+        && mv "${current_file}.tmp" "$current_file" || true
+
+    # ユーザ指定の除外パターン
+    if [[ -n "$exclude" ]]; then
+        grep -vE "$exclude" "$current_file" > "${current_file}.tmp" 2>/dev/null \
+            && mv "${current_file}.tmp" "$current_file" || true
+    fi
+
+    # キャッシュとの差分検出
+    local new_urls=""
+    if [[ -f "$cache_file" ]]; then
+        # 新規行 or lastmod が変わった行 → URL を抽出
+        new_urls="$(comm -23 <(sort "$current_file") <(sort "$cache_file") | cut -f1)"
+    else
+        # 初回: lastmod が直近48時間以内のURLのみ
+        new_urls="$(python3 -c "
+import sys
+from datetime import datetime, timedelta, timezone
+cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
+for line in sys.stdin:
+    parts = line.strip().split('\t')
+    if len(parts) >= 2 and parts[1]:
+        try:
+            dt = datetime.fromisoformat(parts[1].replace('Z', '+00:00'))
+            if dt > cutoff:
+                print(parts[0])
+        except Exception:
+            pass
+" < "$current_file")"
+    fi
+
+    # キャッシュ更新
+    cp "$current_file" "$cache_file"
+
+    echo "$new_urls"
+}
+
 fetch_rss() {
     local url="$1"
     local name="$2"
@@ -162,9 +232,10 @@ with open('${output_file}', 'w') as f:
 
 log "[Step 0] Fetching RSS feeds..."
 
-# 公式ソース (RSS取得 + web_searchクエリ収集)
+# 公式ソース (RSS取得 + web_searchクエリ収集 + サイトマップ差分)
 OFFICIAL_RSS=""
 WEB_SEARCH_QUERIES=""
+SITEMAP_NEW_PAGES=""
 official_count="$(yq ".channels.${CHANNEL}.official_sources | length" "$CONFIG_FILE")"
 for ((i = 0; i < official_count; i++)); do
     src_type="$(yq -r ".channels.${CHANNEL}.official_sources[${i}].type" "$CONFIG_FILE")"
@@ -182,6 +253,22 @@ $(fetch_rss "$src_url" "$src_name")
 --- ${src_name} ---
 $(fetch_json_api "$src_url" "$src_name")
 "
+    elif [[ "$src_type" == "sitemap" ]]; then
+        src_urls="$(yq -r ".channels.${CHANNEL}.official_sources[${i}].urls[]" "$CONFIG_FILE")"
+        src_exclude="$(yq -r ".channels.${CHANNEL}.official_sources[${i}].exclude_patterns // \"\"" "$CONFIG_FILE")"
+        cache_key="${CHANNEL}-$(echo "$src_name" | tr ' ' '-' | tr '[:upper:]' '[:lower:]')"
+        log "  Sitemap: ${src_name} (cache: ${cache_key})"
+        sitemap_new="$(fetch_sitemap_diff "$cache_key" "$src_urls" "$src_exclude")"
+        if [[ -n "$sitemap_new" ]]; then
+            new_count="$(echo "$sitemap_new" | wc -l)"
+            log "  Sitemap: ${new_count} new/updated pages found"
+            SITEMAP_NEW_PAGES+="
+--- ${src_name}: 新規・更新ページ ---
+${sitemap_new}
+"
+        else
+            log "  Sitemap: no new pages"
+        fi
     elif [[ "$src_type" == "web_search" ]]; then
         src_query="$(yq -r ".channels.${CHANNEL}.official_sources[${i}].query" "$CONFIG_FILE")"
         log "  Web search: ${src_name} (query: ${src_query})"
@@ -209,6 +296,7 @@ done
 echo "$OFFICIAL_RSS" > "${TMPDIR}/official_rss.txt"
 echo "$COMMUNITY_RSS" > "${TMPDIR}/community_rss.txt"
 echo "$WEB_SEARCH_QUERIES" > "${TMPDIR}/web_search_queries.txt"
+echo "$SITEMAP_NEW_PAGES" > "${TMPDIR}/sitemap_new_pages.txt"
 
 ##############################################################################
 # Step 1: 新機能・トピック抽出 (claude -p)
@@ -230,6 +318,7 @@ render_template "${TMPDIR}/step1_template.md" "${TMPDIR}/step1_prompt.md" \
     "CHANNEL_NAME=${TMPDIR}/val_channel_name.txt" \
     "EXTRACTION_PROMPT=${TMPDIR}/val_extraction_prompt.txt" \
     "RSS_DATA=${TMPDIR}/official_rss.txt" \
+    "SITEMAP_NEW_PAGES=${TMPDIR}/sitemap_new_pages.txt" \
     "WEB_SEARCH_QUERIES=${TMPDIR}/web_search_queries.txt" \
     "FEATURES_PATH=${TMPDIR}/val_features_path.txt"
 
@@ -335,6 +424,9 @@ if [[ "$DRY_RUN" == true ]]; then
     echo ""
     echo "--- X Search Results (Step 2) ---"
     cat "${TMPDIR}/x_search_results.txt"
+    echo ""
+    echo "--- Sitemap New Pages ---"
+    cat "${TMPDIR}/sitemap_new_pages.txt"
     echo ""
     echo "--- Official RSS (${#OFFICIAL_RSS} chars) ---"
     echo "$OFFICIAL_RSS" | head -50
