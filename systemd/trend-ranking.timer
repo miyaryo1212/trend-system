@@ -1,0 +1,10 @@
+[Unit]
+Description=Rolling 4-week Top 5 ranking generation (daily 08:00, after all channels complete)
+
+[Timer]
+OnCalendar=*-*-* 08:00:00
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

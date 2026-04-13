@@ -40,7 +40,7 @@ echo "  Home: ${TARGET_HOME}"
 echo "  System dir: ${SYSTEM_DIR}"
 echo ""
 
-for unit in "${SYSTEMD_DIR}"/trend-ch*.{timer,service}; do
+for unit in "${SYSTEMD_DIR}"/trend-*.{timer,service}; do
     [[ -f "$unit" ]] || continue
     filename="$(basename "$unit")"
     echo "  ${filename}"
@@ -56,7 +56,7 @@ echo "Reloading systemd..."
 systemctl daemon-reload
 
 echo "Enabling timers..."
-for timer in "${SYSTEMD_DIR}"/trend-ch*.timer; do
+for timer in "${SYSTEMD_DIR}"/trend-*.timer; do
     [[ -f "$timer" ]] || continue
     name="$(basename "$timer")"
     systemctl enable --now "$name"
@@ -65,4 +65,4 @@ done
 
 echo ""
 echo "Status:"
-systemctl list-timers 'trend-ch*' --no-pager
+systemctl list-timers 'trend-*' --no-pager
