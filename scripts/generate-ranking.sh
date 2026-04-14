@@ -177,12 +177,12 @@ if [[ ! -s "$RAW_OUTPUT" ]]; then
     exit 1
 fi
 
-# コードフェンス除去 + JSONオブジェクト抽出
+# コードフェンス除去 + JSONオブジェクト抽出（外側 { と } は行頭にある想定）
 CLEAN_JSON="${TMPDIR}/ranking_raw.json"
 awk '
     /^```/ { in_fence = !in_fence; next }
     { print }
-' "$RAW_OUTPUT" | sed -n '/{/,/}/p' > "$CLEAN_JSON"
+' "$RAW_OUTPUT" | awk '/^\{/,/^\}/' > "$CLEAN_JSON"
 
 if ! jq empty "$CLEAN_JSON" 2>/dev/null; then
     log "ERROR: invalid JSON from claude"
