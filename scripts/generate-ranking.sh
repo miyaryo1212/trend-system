@@ -199,11 +199,23 @@ fi
 # Step 5: メタ情報を追加して最終JSON生成
 ##############################################################################
 
+# 前回 ranking から slug -> rank のマップを構築 (順位変動の矢印表示用)
+PREV_MAP="{}"
+if [[ -f "$OUTPUT_FILE" ]]; then
+    PREV_MAP="$(jq 'reduce (.items // [])[] as $i ({}; .[$i.slug] = $i.rank)' "$OUTPUT_FILE")"
+fi
+
 FINAL_JSON="${TMPDIR}/ranking.json"
-jq --arg period_start "$PERIOD_START" \
+jq --argjson prev "$PREV_MAP" \
+   --arg period_start "$PERIOD_START" \
    --arg period_end "$PERIOD_END" \
    --arg generated_at "$NOW_ISO" \
-    '{generated_at: $generated_at, period_start: $period_start, period_end: $period_end, items: .items}' \
+    '{
+       generated_at: $generated_at,
+       period_start: $period_start,
+       period_end: $period_end,
+       items: [.items[] | . + {previous_rank: ($prev[.slug] // null)}]
+     }' \
     "$CLEAN_JSON" > "$FINAL_JSON"
 
 log "  Generated ranking:"
