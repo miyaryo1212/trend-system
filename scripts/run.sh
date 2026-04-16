@@ -17,11 +17,12 @@ export TZ=Asia/Tokyo
 #              (レポート生成・git push は行わない)
 #
 # Pipeline:
-#   Step 0: RSSフィード取得 (curl)
-#   Step 1: 新機能・トピック抽出 (claude -p, コスト$0)
-#   Step 2: 機能ごとにX検索 (Grok x_search, ~$0.02/機能)
-#   Step 3: 最終レポート生成 (claude -p, コスト$0)
-#   Step 4: index.html再生成 + git push
+#   Step 0:   RSSフィード取得 (curl)
+#   Step 1:   新機能・トピック抽出 (claude -p, コスト$0)
+#   Step 2:   機能ごとにX検索 (Grok x_search, ~$0.02/機能)
+#   Step 3:   最終レポート生成 (claude -p, コスト$0)
+#   Step 3.5: Codex レビュー注入 (codex exec, サブスク枠内, 任意)
+#   Step 4:   index.html再生成 + git push
 ##############################################################################
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -507,6 +508,66 @@ if [[ "$FILE_SIZE" -lt 200 ]]; then
 fi
 
 log "  Report generated: ${OUTPUT_PATH} (${FILE_SIZE} bytes)"
+
+##############################################################################
+# Step 3.5: Codex レビュー (任意 — codex CLI が無ければスキップ)
+##############################################################################
+
+if command -v codex >/dev/null 2>&1; then
+    log "[Step 3.5] Generating Codex review..."
+
+    CODEX_PROMPT="${TMPDIR}/codex_prompt.md"
+    awk -v f="$OUTPUT_PATH" '
+        /{{REPORT}}/ {
+            while ((getline line < f) > 0) print line
+            close(f)
+            next
+        }
+        { print }
+    ' "${SYSTEM_DIR}/prompts/codex-review.md" > "$CODEX_PROMPT"
+
+    CODEX_OUTPUT="${TMPDIR}/codex_output.txt"
+    if codex exec --skip-git-repo-check - < "$CODEX_PROMPT" > "$CODEX_OUTPUT" 2>>"$LOG_FILE"; then
+        # ANSI カラー除去 + 外側 { から } までを抽出
+        CLEAN_JSON="${TMPDIR}/codex_review.json"
+        sed 's/\x1b\[[0-9;]*m//g' "$CODEX_OUTPUT" | awk '/^\{/,/^\}/' > "$CLEAN_JSON"
+
+        if [[ -s "$CLEAN_JSON" ]] && jq empty "$CLEAN_JSON" 2>/dev/null; then
+            CODEX_REVIEW_TEXT="$(jq -r '.review // ""' "$CLEAN_JSON")"
+            CODEX_IMP="$(jq -r '.importance // empty' "$CLEAN_JSON")"
+
+            if [[ -n "$CODEX_REVIEW_TEXT" ]]; then
+                log "  Codex: \"${CODEX_REVIEW_TEXT}\" (★${CODEX_IMP:-?})"
+
+                # frontmatter に 2 フィールド注入 (閉じ `---` の直前)
+                REVIEW_ESC="$(printf '%s' "$CODEX_REVIEW_TEXT" | sed 's/"/\\"/g')"
+                awk -v review="$REVIEW_ESC" -v imp="$CODEX_IMP" '
+                    BEGIN { c = 0; injected = 0 }
+                    /^---$/ {
+                        c++
+                        if (c == 2 && !injected) {
+                            print "codex_review: \"" review "\""
+                            if (imp != "") print "codex_importance: " imp
+                            injected = 1
+                        }
+                    }
+                    { print }
+                ' "$OUTPUT_PATH" > "${OUTPUT_PATH}.tmp" && mv "${OUTPUT_PATH}.tmp" "$OUTPUT_PATH"
+                log "  Injected codex_review + codex_importance"
+            else
+                log "  WARNING: codex returned empty review"
+            fi
+        else
+            log "  WARNING: codex output did not contain valid JSON"
+            log "  --- codex raw output ---"
+            cat "$CODEX_OUTPUT" >> "$LOG_FILE"
+        fi
+    else
+        log "  WARNING: codex exec failed"
+    fi
+else
+    log "[Step 3.5] codex CLI not found, skipping Codex review"
+fi
 
 ##############################################################################
 # Step 4: git push (Astroビルド・デプロイはGitHub Actionsが担当)
