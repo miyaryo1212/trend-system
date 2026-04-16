@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Reports are dated in JST; pin the 4-week rolling window to Asia/Tokyo so
+# it matches the frontmatter dates even when the host runs in another TZ.
+export TZ=Asia/Tokyo
+
 ##############################################################################
 # generate-ranking.sh — 直近4週間Top 5ランキング生成 (AI選定)
 #

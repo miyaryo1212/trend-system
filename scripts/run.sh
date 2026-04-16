@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Reports are dated in JST; pin all date commands to Asia/Tokyo so the
+# filename and log timestamps line up even if the host is in another TZ.
+export TZ=Asia/Tokyo
+
 ##############################################################################
 # run.sh — トレンド調査レポート生成 (2段階パイプライン)
 #
