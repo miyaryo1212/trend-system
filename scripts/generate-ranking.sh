@@ -71,6 +71,9 @@ for md in "${CONTENT_DIR}"/*.md; do
     importance="$(echo "$fm" | yq -r '.importance // 0')"
     date_val="$(echo "$fm" | yq -r '.date // ""')"
     summary="$(echo "$fm" | yq -r '.summary // ""')"
+    codex_importance="$(echo "$fm" | yq -r '.codex_importance // 0')"
+    # codex_review は自由文なので TSV 破壊を避けるため tab/改行を空白化
+    codex_review="$(echo "$fm" | yq -r '.codex_review // ""' | tr '\t\n\r' '   ')"
 
     [[ -z "$title" ]] && continue
     [[ -z "$date_val" ]] && continue
@@ -80,9 +83,10 @@ for md in "${CONTENT_DIR}"/*.md; do
     [[ "$date_day" < "$PERIOD_START" ]] && continue
     [[ "$date_day" > "$PERIOD_END" ]] && continue
 
-    # TSV: slug \t date \t importance \t channel \t title \t summary
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+    # TSV: slug \t date \t importance \t channel \t title \t summary \t codex_importance \t codex_review
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$slug" "$date_val" "$importance" "$channel" "$title" "$summary" \
+        "$codex_importance" "$codex_review" \
         >> "$CANDIDATES_TSV"
 done
 shopt -u nullglob
@@ -130,7 +134,17 @@ log "  Total candidates for AI: ${CANDIDATE_COUNT}"
 CANDIDATES_BLOCK="${TMPDIR}/candidates_block.md"
 : > "$CANDIDATES_BLOCK"
 
-while IFS=$'\t' read -r slug date_val imp channel title summary; do
+while IFS=$'\t' read -r slug date_val imp channel title summary codex_imp codex_rev; do
+    codex_line=""
+    if [[ -n "$codex_rev" && "$codex_imp" != "0" ]]; then
+        codex_line="- **codex_importance**: ★${codex_imp}
+- **codex_review**: ${codex_rev}"
+    elif [[ -n "$codex_rev" ]]; then
+        codex_line="- **codex_review**: ${codex_rev}"
+    elif [[ "$codex_imp" != "0" ]]; then
+        codex_line="- **codex_importance**: ★${codex_imp}"
+    fi
+
     cat >> "$CANDIDATES_BLOCK" <<EOF
 
 ---
@@ -142,6 +156,7 @@ while IFS=$'\t' read -r slug date_val imp channel title summary; do
 - **title**: ${title}
 - **summary**: ${summary}
 EOF
+    [[ -n "$codex_line" ]] && printf '%s\n' "$codex_line" >> "$CANDIDATES_BLOCK"
 done < "$SELECTED_TSV"
 
 PROMPT_FILE="${TMPDIR}/prompt.md"
