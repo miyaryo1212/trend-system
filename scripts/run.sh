@@ -22,6 +22,7 @@ export TZ=Asia/Tokyo
 #   Step 2:   機能ごとにX検索 (Grok x_search, ~$0.02/機能)
 #   Step 3:   最終レポート生成 (claude -p, コスト$0)
 #   Step 3.5: Codex レビュー注入 (codex exec, サブスク枠内, 任意)
+#   Step 3.6: frontmatter YAML 静的解析 (失敗時 claude -p で修正)
 #   Step 4:   index.html再生成 + git push
 ##############################################################################
 
@@ -567,6 +568,60 @@ if command -v codex >/dev/null 2>&1; then
     fi
 else
     log "[Step 3.5] codex CLI not found, skipping Codex review"
+fi
+
+##############################################################################
+# Step 3.6: frontmatter YAML 静的解析 (失敗時は claude -p で修正)
+##############################################################################
+#
+# 過去事例 (2026-04-26): Step 3 のClaudeが frontmatter に codex_review を勝手に
+# 書いた状態で Step 3.5 awk が同キーをもう1組注入し、duplicate-key で CF Pages
+# のビルドが失敗した。Astro/js-yaml と等価な strict パース (重複キー検出) を
+# 注入後の最終状態にかけ、壊れていれば claude -p で修正してリトライする。
+
+log "[Step 3.6] Validating frontmatter YAML..."
+
+VALIDATOR="${SYSTEM_DIR}/scripts/validate-frontmatter.py"
+VALIDATE_OUT="${TMPDIR}/frontmatter_validate.txt"
+
+if python3 "$VALIDATOR" "$OUTPUT_PATH" > "$VALIDATE_OUT" 2>&1; then
+    log "  Frontmatter YAML: OK"
+else
+    log "  Frontmatter YAML: INVALID"
+    while IFS= read -r line; do log "    | $line"; done < "$VALIDATE_OUT"
+    log "  Falling back to claude -p for repair..."
+
+    REPAIR_PROMPT="${TMPDIR}/yaml_repair_prompt.md"
+    {
+        echo "次のMarkdownレポートのfrontmatter (先頭の \`---\` で囲まれたYAML部分) に構文エラーがあります。\`Edit\` ツールで in-place 修正してください。"
+        echo
+        echo "- ファイル: ${OUTPUT_PATH}"
+        echo "- バリデータ出力:"
+        echo
+        echo '```'
+        cat "$VALIDATE_OUT"
+        echo '```'
+        echo
+        echo "修正ルール:"
+        echo "1. **frontmatter (先頭の \`---\` 〜 直後の \`---\` の間) のみ** を修正する。本文には触れない。"
+        echo "2. **重複キー** がある場合は **末尾側 (閉じ \`---\` に近い方)** を残す。後段で自動注入された値が末尾側であり、これをシステムの正と扱う。"
+        echo "3. それ以外のYAMLエラー (引用符・インデント等) は最小限の編集で修正する。"
+        echo "4. 修正後はそのターンで終了すること。"
+    } > "$REPAIR_PROMPT"
+
+    claude -p \
+        --max-turns 5 \
+        --allowedTools "Read" "Edit" \
+        < "$REPAIR_PROMPT" \
+        2>> "$LOG_FILE" || true
+
+    if python3 "$VALIDATOR" "$OUTPUT_PATH" > "$VALIDATE_OUT" 2>&1; then
+        log "  Frontmatter YAML: REPAIRED by claude -p"
+    else
+        log "  ERROR: Frontmatter YAML still invalid after claude repair:"
+        while IFS= read -r line; do log "    | $line"; done < "$VALIDATE_OUT"
+        exit 1
+    fi
 fi
 
 ##############################################################################
