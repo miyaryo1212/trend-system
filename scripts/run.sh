@@ -80,6 +80,19 @@ fi
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"; rm -f "$LOCK_FILE"' EXIT
 
+# ---- パイプライン警告 ----
+# Step ごとにフォールバックが発動した場合、ここに 1 行ずつ追記する。
+# Step 3 完了後に frontmatter の `pipeline_warnings:` 配列に注入され、
+# トレンドレポート画面で警告バナーとして表示される。
+WARNINGS_FILE="${TMPDIR}/pipeline_warnings.txt"
+: > "$WARNINGS_FILE"
+
+record_warning() {
+    local msg="$1"
+    log "  PIPELINE_WARNING: ${msg}"
+    printf '%s\n' "$msg" >> "$WARNINGS_FILE"
+}
+
 # ---- 設定読み込み ----
 
 if ! yq -e ".channels.${CHANNEL}" "$CONFIG_FILE" > /dev/null 2>&1; then
@@ -330,14 +343,14 @@ render_template "${TMPDIR}/step1_template.md" "${TMPDIR}/step1_prompt.md" \
 
 log "  Calling claude -p for feature extraction..."
 claude -p \
-    --max-turns 6 \
+    --max-turns 10 \
     --allowedTools "Read" "Write" "Bash(curl:*)" "WebSearch" "WebFetch" \
     < "${TMPDIR}/step1_prompt.md" \
     2>> "$LOG_FILE" || true
 
 # features.txtが生成されたか確認
 if [[ ! -f "$FEATURES_PATH" ]]; then
-    log "  WARNING: features.txt not created, using fallback"
+    record_warning "Step 1 (機能抽出) で claude -p がfeatures.txtを生成できずフォールバック発動 (max turns到達等)。features=なし扱いとなり、X検索 (Step 2) もスキップされたため、新規アップデートを取りこぼしている可能性があります。"
     echo "なし" > "$FEATURES_PATH"
 fi
 
@@ -362,7 +375,7 @@ elif [[ "$FEATURES" == "なし" || -z "$FEATURES" ]]; then
     log "  No features to search, skipping X search"
     X_SEARCH_RESULTS="(新機能なし — X検索スキップ)"
 elif [[ -z "${XAI_API_KEY:-}" ]]; then
-    log "  WARNING: XAI_API_KEY not set, skipping X search"
+    record_warning "Step 2 (X検索) で XAI_API_KEY が未設定のためスキップされました。SNS反応情報が欠落しています。"
     X_SEARCH_RESULTS="(X検索スキップ: APIキー未設定)"
 else
     PROMPT_TEMPLATE="$(yq -r ".channels.${CHANNEL}.x_search.prompt_template" "$CONFIG_FILE")"
@@ -509,6 +522,44 @@ if [[ "$FILE_SIZE" -lt 200 ]]; then
 fi
 
 log "  Report generated: ${OUTPUT_PATH} (${FILE_SIZE} bytes)"
+
+##############################################################################
+# Step 3.4: pipeline_warnings 注入 (フォールバック発動時のみ)
+##############################################################################
+#
+# Step 1/2 等でフォールバックが発動した場合、レポート閲覧者に
+# 「正常に完了していない可能性があります」を伝えるため、frontmatter に
+# pipeline_warnings 配列を注入する。trend-reports 側の Report.astro が
+# このフィールドを読み取り、上部に警告バナーを表示する。
+
+if [[ -s "$WARNINGS_FILE" ]]; then
+    WARNING_COUNT="$(wc -l < "$WARNINGS_FILE")"
+    log "[Step 3.4] Injecting pipeline_warnings (${WARNING_COUNT} entries)..."
+
+    # frontmatter は最初の `---` で開き、2 番目の `---` で閉じる。
+    # 閉じ `---` の直前に pipeline_warnings ブロックを挿入する。
+    awk -v wf="$WARNINGS_FILE" '
+        BEGIN { c = 0; injected = 0 }
+        /^---$/ {
+            c++
+            if (c == 2 && !injected) {
+                print "pipeline_warnings:"
+                while ((getline line < wf) > 0) {
+                    # YAML ダブルクォートエスケープ: \\ → \\\\, " → \"
+                    gsub(/\\/, "\\\\", line)
+                    gsub(/"/, "\\\"", line)
+                    print "  - \"" line "\""
+                }
+                close(wf)
+                injected = 1
+            }
+        }
+        { print }
+    ' "$OUTPUT_PATH" > "${OUTPUT_PATH}.tmp" && mv "${OUTPUT_PATH}.tmp" "$OUTPUT_PATH"
+    log "  pipeline_warnings injected"
+else
+    log "[Step 3.4] No pipeline warnings — skipping injection"
+fi
 
 ##############################################################################
 # Step 3.5: Codex レビュー (任意 — codex CLI が無ければスキップ)
