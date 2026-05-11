@@ -51,9 +51,9 @@ if [[ "$CONFIRM" != "1" ]]; then
     exit 0
 fi
 
-git pull --rebase origin main 2>&1 | { if [[ -n "${LOG_FILE:-}" ]]; then tee -a "$LOG_FILE"; else cat; fi; } \
-    || log "  WARNING: git pull --rebase failed"
-
+# 順序: stage → commit → fetch/rebase → push
+# (`pull --rebase` を unstaged 状態で走らせると "cannot pull with rebase:
+# You have unstaged changes" で落ちるため、コミットしてからリベース)
 git add -- "$REPORT_REL"
 if git diff --cached --quiet; then
     log "  No changes to commit"
@@ -61,6 +61,11 @@ if git diff --cached --quiet; then
 fi
 
 git commit -m "Report: ${CHANNEL_NAME} ${DATE} (manual rerun)"
+
+git fetch origin 2>&1 | { if [[ -n "${LOG_FILE:-}" ]]; then tee -a "$LOG_FILE"; else cat; fi; }
+git rebase origin/main 2>&1 | { if [[ -n "${LOG_FILE:-}" ]]; then tee -a "$LOG_FILE"; else cat; fi; } \
+    || die "git rebase failed — resolve conflict and re-run with --confirm"
+
 git push origin main 2>&1 | { if [[ -n "${LOG_FILE:-}" ]]; then tee -a "$LOG_FILE"; else cat; fi; } \
     || die "git push failed"
 
