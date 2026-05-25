@@ -21,8 +21,10 @@ export TZ=Asia/Tokyo
 #   Step 1:   新機能・トピック抽出 (claude -p, コスト$0)
 #   Step 2:   機能ごとにX検索 (Grok x_search, ~$0.02/機能)
 #   Step 3:   最終レポート生成 (claude -p, コスト$0)
+#   Step 3.4: Step 3 が前回参照で複製した codex_review/codex_importance を剥がす
 #   Step 3.5: Codex レビュー注入 (codex exec, サブスク枠内, 任意)
-#   Step 3.6: frontmatter YAML 静的解析 (失敗時 claude -p で修正)
+#   Step 3.6: pipeline_warnings 注入 (Step 1/2/3.5 のフォールバック検出時のみ)
+#   Step 3.7: frontmatter YAML 静的解析 (失敗時 claude -p で修正)
 #   Step 4:   index.html再生成 + git push
 ##############################################################################
 
@@ -82,7 +84,7 @@ trap 'rm -rf "$TMPDIR"; rm -f "$LOCK_FILE"' EXIT
 
 # ---- パイプライン警告 ----
 # Step ごとにフォールバックが発動した場合、ここに 1 行ずつ追記する。
-# Step 3 完了後に frontmatter の `pipeline_warnings:` 配列に注入され、
+# Step 3.6 で frontmatter の `pipeline_warnings:` 配列に注入され、
 # トレンドレポート画面で警告バナーとして表示される。
 WARNINGS_FILE="${TMPDIR}/pipeline_warnings.txt"
 : > "$WARNINGS_FILE"
@@ -343,7 +345,7 @@ render_template "${TMPDIR}/step1_template.md" "${TMPDIR}/step1_prompt.md" \
 
 log "  Calling claude -p for feature extraction..."
 claude -p \
-    --max-turns 10 \
+    --max-turns 20 \
     --allowedTools "Read" "Write" "Bash(curl:*)" "WebSearch" "WebFetch" \
     < "${TMPDIR}/step1_prompt.md" \
     2>> "$LOG_FILE" || true
@@ -524,42 +526,22 @@ fi
 log "  Report generated: ${OUTPUT_PATH} (${FILE_SIZE} bytes)"
 
 ##############################################################################
-# Step 3.4: pipeline_warnings 注入 (フォールバック発動時のみ)
+# Step 3.4: Step 3 の claude -p が前回レポート参照で codex_review / codex_importance
+# を真似て書いていることがある (=実際のCodex評価ではなくClaudeの再生成)。
+# Step 3.5 で本物のCodexレビューを注入する前に frontmatter 内の既存
+# codex_review / codex_importance を必ず剥がす。これにより:
+#   - Step 3.5 成功 → 本物のCodex評価のみが残る (重複キー回避にもなる)
+#   - Step 3.5 失敗 → codex_review 不在 = サイト側で「Codex評価未取得」を正直に表現
 ##############################################################################
-#
-# Step 1/2 等でフォールバックが発動した場合、レポート閲覧者に
-# 「正常に完了していない可能性があります」を伝えるため、frontmatter に
-# pipeline_warnings 配列を注入する。trend-reports 側の Report.astro が
-# このフィールドを読み取り、上部に警告バナーを表示する。
 
-if [[ -s "$WARNINGS_FILE" ]]; then
-    WARNING_COUNT="$(wc -l < "$WARNINGS_FILE")"
-    log "[Step 3.4] Injecting pipeline_warnings (${WARNING_COUNT} entries)..."
-
-    # frontmatter は最初の `---` で開き、2 番目の `---` で閉じる。
-    # 閉じ `---` の直前に pipeline_warnings ブロックを挿入する。
-    awk -v wf="$WARNINGS_FILE" '
-        BEGIN { c = 0; injected = 0 }
-        /^---$/ {
-            c++
-            if (c == 2 && !injected) {
-                print "pipeline_warnings:"
-                while ((getline line < wf) > 0) {
-                    # YAML ダブルクォートエスケープ: \\ → \\\\, " → \"
-                    gsub(/\\/, "\\\\", line)
-                    gsub(/"/, "\\\"", line)
-                    print "  - \"" line "\""
-                }
-                close(wf)
-                injected = 1
-            }
-        }
-        { print }
-    ' "$OUTPUT_PATH" > "${OUTPUT_PATH}.tmp" && mv "${OUTPUT_PATH}.tmp" "$OUTPUT_PATH"
-    log "  pipeline_warnings injected"
-else
-    log "[Step 3.4] No pipeline warnings — skipping injection"
-fi
+log "[Step 3.4] Stripping any pre-existing codex_review / codex_importance from frontmatter..."
+awk '
+    BEGIN { c = 0 }
+    /^---$/ { c++; print; next }
+    c == 1 && /^codex_review:[[:space:]]/ { next }
+    c == 1 && /^codex_importance:[[:space:]]/ { next }
+    { print }
+' "$OUTPUT_PATH" > "${OUTPUT_PATH}.tmp" && mv "${OUTPUT_PATH}.tmp" "$OUTPUT_PATH"
 
 ##############################################################################
 # Step 3.5: Codex レビュー (任意 — codex CLI が無ければスキップ)
@@ -607,30 +589,70 @@ if command -v codex >/dev/null 2>&1; then
                 ' "$OUTPUT_PATH" > "${OUTPUT_PATH}.tmp" && mv "${OUTPUT_PATH}.tmp" "$OUTPUT_PATH"
                 log "  Injected codex_review + codex_importance"
             else
-                log "  WARNING: codex returned empty review"
+                record_warning "Step 3.5 (Codexレビュー) で codex exec は成功したが review フィールドが空でした。Codex評価は欠落しています。"
             fi
         else
-            log "  WARNING: codex output did not contain valid JSON"
             log "  --- codex raw output ---"
             cat "$CODEX_OUTPUT" >> "$LOG_FILE"
+            record_warning "Step 3.5 (Codexレビュー) で codex exec の出力が有効なJSONではありませんでした。Codex評価は欠落しています。"
         fi
     else
-        log "  WARNING: codex exec failed"
+        record_warning "Step 3.5 (Codexレビュー) で codex exec が失敗しました (model変更/認証エラー等の可能性)。Codex評価は欠落しています。"
     fi
 else
     log "[Step 3.5] codex CLI not found, skipping Codex review"
 fi
 
 ##############################################################################
-# Step 3.6: frontmatter YAML 静的解析 (失敗時は claude -p で修正)
+# Step 3.6: pipeline_warnings 注入 (フォールバック発動時のみ)
+##############################################################################
+#
+# Step 1/2/3.5 等でフォールバックが発動した場合、レポート閲覧者に
+# 「正常に完了していない可能性があります」を伝えるため、frontmatter に
+# pipeline_warnings 配列を注入する。trend-reports 側の Report.astro が
+# このフィールドを読み取り、上部に警告バナーを表示する。
+# Step 3.5 (Codex) も含めて全フォールバックを拾うため、注入は最後にまとめて行う。
+
+if [[ -s "$WARNINGS_FILE" ]]; then
+    WARNING_COUNT="$(wc -l < "$WARNINGS_FILE")"
+    log "[Step 3.6] Injecting pipeline_warnings (${WARNING_COUNT} entries)..."
+
+    # frontmatter は最初の `---` で開き、2 番目の `---` で閉じる。
+    # 閉じ `---` の直前に pipeline_warnings ブロックを挿入する。
+    awk -v wf="$WARNINGS_FILE" '
+        BEGIN { c = 0; injected = 0 }
+        /^---$/ {
+            c++
+            if (c == 2 && !injected) {
+                print "pipeline_warnings:"
+                while ((getline line < wf) > 0) {
+                    # YAML ダブルクォートエスケープ: \\ → \\\\, " → \"
+                    gsub(/\\/, "\\\\", line)
+                    gsub(/"/, "\\\"", line)
+                    print "  - \"" line "\""
+                }
+                close(wf)
+                injected = 1
+            }
+        }
+        { print }
+    ' "$OUTPUT_PATH" > "${OUTPUT_PATH}.tmp" && mv "${OUTPUT_PATH}.tmp" "$OUTPUT_PATH"
+    log "  pipeline_warnings injected"
+else
+    log "[Step 3.6] No pipeline warnings — skipping injection"
+fi
+
+##############################################################################
+# Step 3.7: frontmatter YAML 静的解析 (失敗時は claude -p で修正)
 ##############################################################################
 #
 # 過去事例 (2026-04-26): Step 3 のClaudeが frontmatter に codex_review を勝手に
 # 書いた状態で Step 3.5 awk が同キーをもう1組注入し、duplicate-key で CF Pages
-# のビルドが失敗した。Astro/js-yaml と等価な strict パース (重複キー検出) を
-# 注入後の最終状態にかけ、壊れていれば claude -p で修正してリトライする。
+# のビルドが失敗した。現在は Step 3.4 で事前に既存キーを剥がすので duplicate は
+# 起きないが、引用符・インデント崩れを検出する safety net としてバリデーションを
+# 残してある。
 
-log "[Step 3.6] Validating frontmatter YAML..."
+log "[Step 3.7] Validating frontmatter YAML..."
 
 VALIDATOR="${SYSTEM_DIR}/scripts/validate-frontmatter.py"
 VALIDATE_OUT="${TMPDIR}/frontmatter_validate.txt"
