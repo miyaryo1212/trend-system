@@ -23,8 +23,9 @@ export TZ=Asia/Tokyo
 #   Step 3:   最終レポート生成 (claude -p, コスト$0)
 #   Step 3.4: Step 3 が前回参照で複製した codex_review/codex_importance を剥がす
 #   Step 3.5: Codex レビュー注入 (codex exec, サブスク枠内, 任意)
-#   Step 3.6: pipeline_warnings 注入 (Step 1/2/3.5 のフォールバック検出時のみ)
-#   Step 3.7: frontmatter YAML 静的解析 (失敗時 claude -p で修正)
+#   Step 3.6: QC ゲート (ステイル検知 — 継続表記/前日重複がしきい値超で警告)
+#   Step 3.7: pipeline_warnings 注入 (Step 1/2/3.5/3.6 のフォールバック検出時のみ)
+#   Step 3.8: frontmatter YAML 静的解析 (失敗時 claude -p で修正)
 #   Step 4:   index.html再生成 + git push
 ##############################################################################
 
@@ -604,18 +605,49 @@ else
 fi
 
 ##############################################################################
-# Step 3.6: pipeline_warnings 注入 (フォールバック発動時のみ)
+# Step 3.6: QC ゲート (ステイル検知)
 ##############################################################################
 #
-# Step 1/2/3.5 等でフォールバックが発動した場合、レポート閲覧者に
-# 「正常に完了していない可能性があります」を伝えるため、frontmatter に
+# 過去事例 (2026-05): Step 3 prompt の「重複は (前回から継続) と注記して残す」
+# 設計と Step 1 が previous_report を見ない問題が重なり、本文の大半が続報で
+# 埋まった「実質的に新規情報なし」のレポートが2週間量産され13件削除した。
+# 再発を生成時点で検知するため、本文の継続表記数と前日 features 重複数を
+# しきい値判定する。ステイル判定時は record_warning で pipeline_warnings に
+# 流し込む (publish は止めず、警告バナーで flag する warn 方式)。
+# pipeline_warnings 注入 (Step 3.7) より前で実行する必要がある。
+
+log "[Step 3.6] Running QC gate (staleness detection)..."
+
+QC_GATE="${SYSTEM_DIR}/scripts/qc-gate.py"
+QC_OUT="${TMPDIR}/qc_gate.txt"
+if python3 "$QC_GATE" "$OUTPUT_PATH" --reports-dir "$(dirname "$OUTPUT_PATH")" > "$QC_OUT" 2>&1; then
+    log "  QC gate: OK"
+else
+    qc_ec=$?
+    if [[ "$qc_ec" -eq 2 ]]; then
+        # ステイル判定 — 1行メッセージを pipeline_warnings に流す
+        record_warning "$(cat "$QC_OUT")"
+    else
+        # パースエラー等 (exit 1) — ログだけ残して続行
+        log "  WARNING: QC gate errored (exit ${qc_ec}):"
+        while IFS= read -r line; do log "    | $line"; done < "$QC_OUT"
+    fi
+fi
+
+##############################################################################
+# Step 3.7: pipeline_warnings 注入 (フォールバック発動時のみ)
+##############################################################################
+#
+# Step 1/2/3.5/3.6 等でフォールバックやステイル検知が発動した場合、レポート
+# 閲覧者に「正常に完了していない可能性があります」を伝えるため、frontmatter に
 # pipeline_warnings 配列を注入する。trend-reports 側の Report.astro が
 # このフィールドを読み取り、上部に警告バナーを表示する。
-# Step 3.5 (Codex) も含めて全フォールバックを拾うため、注入は最後にまとめて行う。
+# Step 3.5 (Codex) / 3.6 (QC) も含めて全フォールバックを拾うため、注入はここで
+# まとめて行う。
 
 if [[ -s "$WARNINGS_FILE" ]]; then
     WARNING_COUNT="$(wc -l < "$WARNINGS_FILE")"
-    log "[Step 3.6] Injecting pipeline_warnings (${WARNING_COUNT} entries)..."
+    log "[Step 3.7] Injecting pipeline_warnings (${WARNING_COUNT} entries)..."
 
     # frontmatter は最初の `---` で開き、2 番目の `---` で閉じる。
     # 閉じ `---` の直前に pipeline_warnings ブロックを挿入する。
@@ -639,11 +671,11 @@ if [[ -s "$WARNINGS_FILE" ]]; then
     ' "$OUTPUT_PATH" > "${OUTPUT_PATH}.tmp" && mv "${OUTPUT_PATH}.tmp" "$OUTPUT_PATH"
     log "  pipeline_warnings injected"
 else
-    log "[Step 3.6] No pipeline warnings — skipping injection"
+    log "[Step 3.7] No pipeline warnings — skipping injection"
 fi
 
 ##############################################################################
-# Step 3.7: frontmatter YAML 静的解析 (失敗時は claude -p で修正)
+# Step 3.8: frontmatter YAML 静的解析 (失敗時は claude -p で修正)
 ##############################################################################
 #
 # 過去事例 (2026-04-26): Step 3 のClaudeが frontmatter に codex_review を勝手に
@@ -652,7 +684,7 @@ fi
 # 起きないが、引用符・インデント崩れを検出する safety net としてバリデーションを
 # 残してある。
 
-log "[Step 3.7] Validating frontmatter YAML..."
+log "[Step 3.8] Validating frontmatter YAML..."
 
 VALIDATOR="${SYSTEM_DIR}/scripts/validate-frontmatter.py"
 VALIDATE_OUT="${TMPDIR}/frontmatter_validate.txt"
