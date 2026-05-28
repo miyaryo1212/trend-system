@@ -536,13 +536,8 @@ log "  Report generated: ${OUTPUT_PATH} (${FILE_SIZE} bytes)"
 ##############################################################################
 
 log "[Step 3.4] Stripping any pre-existing codex_review / codex_importance from frontmatter..."
-awk '
-    BEGIN { c = 0 }
-    /^---$/ { c++; print; next }
-    c == 1 && /^codex_review:[[:space:]]/ { next }
-    c == 1 && /^codex_importance:[[:space:]]/ { next }
-    { print }
-' "$OUTPUT_PATH" > "${OUTPUT_PATH}.tmp" && mv "${OUTPUT_PATH}.tmp" "$OUTPUT_PATH"
+awk -f "${SCRIPT_DIR}/lib/strip-codex-frontmatter.awk" \
+    "$OUTPUT_PATH" > "${OUTPUT_PATH}.tmp" && mv "${OUTPUT_PATH}.tmp" "$OUTPUT_PATH"
 
 ##############################################################################
 # Step 3.5: Codex レビュー (任意 — codex CLI が無ければスキップ)
@@ -565,7 +560,7 @@ if command -v codex >/dev/null 2>&1; then
     if codex exec --skip-git-repo-check - < "$CODEX_PROMPT" > "$CODEX_OUTPUT" 2>>"$LOG_FILE"; then
         # ANSI カラー除去 + 外側 { から } までを抽出
         CLEAN_JSON="${TMPDIR}/codex_review.json"
-        sed 's/\x1b\[[0-9;]*m//g' "$CODEX_OUTPUT" | awk '/^\{/,/^\}/' > "$CLEAN_JSON"
+        bash "${SCRIPT_DIR}/lib/extract-codex-json.sh" "$CODEX_OUTPUT" > "$CLEAN_JSON"
 
         if [[ -s "$CLEAN_JSON" ]] && jq empty "$CLEAN_JSON" 2>/dev/null; then
             CODEX_REVIEW_TEXT="$(jq -r '.review // ""' "$CLEAN_JSON")"
@@ -576,18 +571,9 @@ if command -v codex >/dev/null 2>&1; then
 
                 # frontmatter に 2 フィールド注入 (閉じ `---` の直前)
                 REVIEW_ESC="$(printf '%s' "$CODEX_REVIEW_TEXT" | sed 's/"/\\"/g')"
-                awk -v review="$REVIEW_ESC" -v imp="$CODEX_IMP" '
-                    BEGIN { c = 0; injected = 0 }
-                    /^---$/ {
-                        c++
-                        if (c == 2 && !injected) {
-                            print "codex_review: \"" review "\""
-                            if (imp != "") print "codex_importance: " imp
-                            injected = 1
-                        }
-                    }
-                    { print }
-                ' "$OUTPUT_PATH" > "${OUTPUT_PATH}.tmp" && mv "${OUTPUT_PATH}.tmp" "$OUTPUT_PATH"
+                awk -v review="$REVIEW_ESC" -v imp="$CODEX_IMP" \
+                    -f "${SCRIPT_DIR}/lib/inject-codex-review.awk" \
+                    "$OUTPUT_PATH" > "${OUTPUT_PATH}.tmp" && mv "${OUTPUT_PATH}.tmp" "$OUTPUT_PATH"
                 log "  Injected codex_review + codex_importance"
             else
                 record_warning "Step 3.5 (Codexレビュー) で codex exec は成功したが review フィールドが空でした。Codex評価は欠落しています。"
@@ -651,24 +637,9 @@ if [[ -s "$WARNINGS_FILE" ]]; then
 
     # frontmatter は最初の `---` で開き、2 番目の `---` で閉じる。
     # 閉じ `---` の直前に pipeline_warnings ブロックを挿入する。
-    awk -v wf="$WARNINGS_FILE" '
-        BEGIN { c = 0; injected = 0 }
-        /^---$/ {
-            c++
-            if (c == 2 && !injected) {
-                print "pipeline_warnings:"
-                while ((getline line < wf) > 0) {
-                    # YAML ダブルクォートエスケープ: \\ → \\\\, " → \"
-                    gsub(/\\/, "\\\\", line)
-                    gsub(/"/, "\\\"", line)
-                    print "  - \"" line "\""
-                }
-                close(wf)
-                injected = 1
-            }
-        }
-        { print }
-    ' "$OUTPUT_PATH" > "${OUTPUT_PATH}.tmp" && mv "${OUTPUT_PATH}.tmp" "$OUTPUT_PATH"
+    awk -v wf="$WARNINGS_FILE" \
+        -f "${SCRIPT_DIR}/lib/inject-pipeline-warnings.awk" \
+        "$OUTPUT_PATH" > "${OUTPUT_PATH}.tmp" && mv "${OUTPUT_PATH}.tmp" "$OUTPUT_PATH"
     log "  pipeline_warnings injected"
 else
     log "[Step 3.7] No pipeline warnings — skipping injection"
