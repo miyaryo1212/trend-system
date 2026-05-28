@@ -106,9 +106,9 @@ for i in "${!TARGETS[@]}"; do
         { print }
     ' "$PROMPT_FILE" > "${TMPDIR}/prompt.md"
 
-    # Codex 実行
+    # Codex 実行 (モデル明示 pin — デフォルト drift 防止)
     RAW="${TMPDIR}/raw.txt"
-    if ! codex exec --skip-git-repo-check - < "${TMPDIR}/prompt.md" > "$RAW" 2>>"$LOG_FILE"; then
+    if ! codex exec --model "${CODEX_MODEL:-gpt-5.4}" --skip-git-repo-check - < "${TMPDIR}/prompt.md" > "$RAW" 2>>"$LOG_FILE"; then
         log "  FAIL: codex exec returned non-zero"
         FAIL_COUNT=$((FAIL_COUNT + 1))
         FAIL_LIST+=("$slug")

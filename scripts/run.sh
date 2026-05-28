@@ -329,6 +329,16 @@ log "[Step 1] Extracting features/topics..."
 FEATURES_PATH="${TMPDIR}/features.txt"
 EXTRACTION_PROMPT="$(yq -r ".channels.${CHANNEL}.feature_extraction.prompt" "$CONFIG_FILE")"
 
+# 前回レポート取得 (Step 1 の重複除外判定 + Step 3 の差分検出で共用)
+PREV_FILE="$(ls -t "${REPORTS_DIR}/src/content/reports/"*"-${CHANNEL}.md" 2>/dev/null | head -1 || echo "")"
+if [[ -n "${PREV_FILE:-}" && -f "$PREV_FILE" ]]; then
+    log "  Previous report: ${PREV_FILE}"
+    head -c 20000 "$PREV_FILE" > "${TMPDIR}/previous_report.txt"
+else
+    log "  No previous report"
+    echo "(前回レポートなし — 初回生成)" > "${TMPDIR}/previous_report.txt"
+fi
+
 # プロンプト構築
 cat "${SYSTEM_DIR}/prompts/feature-extraction.md" > "${TMPDIR}/step1_template.md"
 
@@ -342,6 +352,7 @@ render_template "${TMPDIR}/step1_template.md" "${TMPDIR}/step1_prompt.md" \
     "RSS_DATA=${TMPDIR}/official_rss.txt" \
     "SITEMAP_NEW_PAGES=${TMPDIR}/sitemap_new_pages.txt" \
     "WEB_SEARCH_QUERIES=${TMPDIR}/web_search_queries.txt" \
+    "PREVIOUS_REPORT=${TMPDIR}/previous_report.txt" \
     "FEATURES_PATH=${TMPDIR}/val_features_path.txt"
 
 log "  Calling claude -p for feature extraction..."
@@ -473,15 +484,7 @@ log "[Step 3] Generating final report..."
 OUTPUT_PATH="${REPORTS_DIR}/src/content/reports/${DATE}-${CHANNEL}.md"
 mkdir -p "$(dirname "$OUTPUT_PATH")"
 
-# 前回レポート取得
-PREV_FILE="$(ls -t "${REPORTS_DIR}/src/content/reports/"*"-${CHANNEL}.md" 2>/dev/null | head -1 || echo "")"
-if [[ -n "${PREV_FILE:-}" && -f "$PREV_FILE" ]]; then
-    log "  Previous report: ${PREV_FILE}"
-    head -c 20000 "$PREV_FILE" > "${TMPDIR}/previous_report.txt"
-else
-    log "  No previous report"
-    echo "(前回レポートなし — 初回生成)" > "${TMPDIR}/previous_report.txt"
-fi
+# 前回レポートは Step 1 で取得済み (${TMPDIR}/previous_report.txt)
 
 # プロンプト構築 (チャネル専用テンプレートがあればそちらを使用)
 STEP3_TEMPLATE="${SYSTEM_DIR}/prompts/trend-research-${CHANNEL}.md"
@@ -544,7 +547,11 @@ awk -f "${SCRIPT_DIR}/lib/strip-codex-frontmatter.awk" \
 ##############################################################################
 
 if command -v codex >/dev/null 2>&1; then
-    log "[Step 3.5] Generating Codex review..."
+    # モデルを明示 pin する。過去事例 (2026-05-20〜22): codex CLI のデフォルトが
+    # gpt-5.2-codex に drift し、ChatGPT account では 400 を返して Codex レビューが
+    # 3日間連続で silent 欠落した。CODEX_MODEL を env で上書き可能にしつつ既定を固定。
+    CODEX_MODEL="${CODEX_MODEL:-gpt-5.4}"
+    log "[Step 3.5] Generating Codex review... (model: ${CODEX_MODEL})"
 
     CODEX_PROMPT="${TMPDIR}/codex_prompt.md"
     awk -v f="$OUTPUT_PATH" '
@@ -557,7 +564,7 @@ if command -v codex >/dev/null 2>&1; then
     ' "${SYSTEM_DIR}/prompts/codex-review.md" > "$CODEX_PROMPT"
 
     CODEX_OUTPUT="${TMPDIR}/codex_output.txt"
-    if codex exec --skip-git-repo-check - < "$CODEX_PROMPT" > "$CODEX_OUTPUT" 2>>"$LOG_FILE"; then
+    if codex exec --model "$CODEX_MODEL" --skip-git-repo-check - < "$CODEX_PROMPT" > "$CODEX_OUTPUT" 2>>"$LOG_FILE"; then
         # ANSI カラー除去 + 外側 { から } までを抽出
         CLEAN_JSON="${TMPDIR}/codex_review.json"
         bash "${SCRIPT_DIR}/lib/extract-codex-json.sh" "$CODEX_OUTPUT" > "$CLEAN_JSON"
