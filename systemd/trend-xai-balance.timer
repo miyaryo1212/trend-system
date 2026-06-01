@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily xAI prepaid credit balance check (05:50, before CH1)
+
+[Timer]
+OnCalendar=*-*-* 05:50:00
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target
