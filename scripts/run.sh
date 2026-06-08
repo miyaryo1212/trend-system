@@ -96,6 +96,66 @@ record_warning() {
     printf '%s\n' "$msg" >> "$WARNINGS_FILE"
 }
 
+# ---- Slack 発行通知 ----
+# 各チャンネルのレポートを publish した直後に Slack へ通知する
+# (以前は agent-sentinel に任せていた監視を trend-system 自身で行う)。
+# webhook は dev-notify と同じファイルを既定で使用 (未設定なら静かにスキップ)。
+SLACK_WEBHOOK_FILE="${SLACK_WEBHOOK_FILE:-$HOME/.claude/slack-webhook}"
+
+slack_post() {
+    local text="$1"
+    [[ -r "$SLACK_WEBHOOK_FILE" ]] || { log "  Slack: webhook 未設定 — 通知スキップ"; return 0; }
+    local hook
+    hook="$(tr -d '[:space:]' < "$SLACK_WEBHOOK_FILE")"
+    [[ -n "$hook" ]] || return 0
+    curl -fsS --max-time 10 -X POST -H 'Content-Type: application/json' \
+        --data "$(jq -n --arg t "$text" '{text:$t}')" "$hook" >/dev/null 2>&1 \
+        || log "  Slack: 投稿に失敗 (続行)"
+}
+
+# レポート frontmatter (OUTPUT_PATH の YAML) から先頭1キーの値を取り出す。
+fm_value() {
+    awk -v key="$1" '
+        /^---[[:space:]]*$/ { n++; if (n == 2) exit; next }
+        n == 1 && index($0, key ":") == 1 {
+            v = substr($0, length(key) + 2)
+            sub(/^[[:space:]]+/, "", v); sub(/[[:space:]]+$/, "", v)
+            gsub(/^"|"$/, "", v)
+            print v; exit
+        }
+    ' "$OUTPUT_PATH"
+}
+
+# 発行通知を組み立てて送信 (リッチ形式: チャンネル + 重要度★ + タイトル + 要約 + URL)。
+notify_publish() {
+    local url="https://aitrends.miyaryo1212.com/reports/${DATE}-${CHANNEL}"
+    local title summary imp stars msg i
+    title="$(fm_value title)"
+    summary="$(fm_value summary)"
+    imp="$(fm_value importance)"
+
+    stars=""
+    if [[ "$imp" =~ ^[1-5]$ ]]; then
+        stars="重要度 "
+        for ((i = 1; i <= 5; i++)); do
+            if (( i <= imp )); then stars+="★"; else stars+="☆"; fi
+        done
+    fi
+
+    if [[ -n "$summary" && "${#summary}" -gt 180 ]]; then
+        summary="${summary:0:180}…"
+    fi
+
+    msg=":newspaper: *${CHANNEL_NAME}* 新レポート (${DATE})"
+    [[ -n "$stars"   ]] && msg+=$'\n'"${stars}"
+    [[ -n "$title"   ]] && msg+=$'\n'"${title}"
+    [[ -n "$summary" ]] && msg+=$'\n'"要約: ${summary}"
+    msg+=$'\n'"${url}"
+
+    slack_post "$msg"
+    log "  Slack: 発行通知を送信"
+}
+
 # ---- 設定読み込み ----
 
 if ! yq -e ".channels.${CHANNEL}" "$CONFIG_FILE" > /dev/null 2>&1; then
@@ -721,8 +781,12 @@ if git diff --cached --quiet; then
     log "  No changes to commit"
 else
     git commit -m "Report: ${CHANNEL_NAME} ${DATE}"
-    git push origin main 2>> "$LOG_FILE" || log "  WARNING: git push failed"
-    log "  Pushed to trend-reports"
+    if git push origin main 2>> "$LOG_FILE"; then
+        log "  Pushed to trend-reports"
+        notify_publish
+    else
+        log "  WARNING: git push failed"
+    fi
 fi
 
 log "=== Done: ${CHANNEL_NAME} (${CHANNEL}) ==="

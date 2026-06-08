@@ -1,8 +1,8 @@
 [Unit]
-Description=Daily xAI prepaid credit balance check (05:50, before CH1)
+Description=Daily xAI prepaid credit balance check (08:30, after all channels)
 
 [Timer]
-OnCalendar=*-*-* 05:50:00
+OnCalendar=*-*-* 08:30:00
 Persistent=true
 RandomizedDelaySec=120
 
