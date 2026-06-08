@@ -23,8 +23,9 @@ export TZ=Asia/Tokyo
 #   Step 3:   最終レポート生成 (claude -p, コスト$0)
 #   Step 3.4: Step 3 が前回参照で複製した codex_review/codex_importance を剥がす
 #   Step 3.5: Codex レビュー注入 (codex exec, サブスク枠内, 任意)
-#   Step 3.6: pipeline_warnings 注入 (Step 1/2/3.5 のフォールバック検出時のみ)
-#   Step 3.7: frontmatter YAML 静的解析 (失敗時 claude -p で修正)
+#   Step 3.6: QC ゲート (ステイル検知 — 継続表記/前日重複がしきい値超で警告)
+#   Step 3.7: pipeline_warnings 注入 (Step 1/2/3.5/3.6 のフォールバック検出時のみ)
+#   Step 3.8: frontmatter YAML 静的解析 (失敗時 claude -p で修正)
 #   Step 4:   index.html再生成 + git push
 ##############################################################################
 
@@ -328,6 +329,16 @@ log "[Step 1] Extracting features/topics..."
 FEATURES_PATH="${TMPDIR}/features.txt"
 EXTRACTION_PROMPT="$(yq -r ".channels.${CHANNEL}.feature_extraction.prompt" "$CONFIG_FILE")"
 
+# 前回レポート取得 (Step 1 の重複除外判定 + Step 3 の差分検出で共用)
+PREV_FILE="$(ls -t "${REPORTS_DIR}/src/content/reports/"*"-${CHANNEL}.md" 2>/dev/null | head -1 || echo "")"
+if [[ -n "${PREV_FILE:-}" && -f "$PREV_FILE" ]]; then
+    log "  Previous report: ${PREV_FILE}"
+    head -c 20000 "$PREV_FILE" > "${TMPDIR}/previous_report.txt"
+else
+    log "  No previous report"
+    echo "(前回レポートなし — 初回生成)" > "${TMPDIR}/previous_report.txt"
+fi
+
 # プロンプト構築
 cat "${SYSTEM_DIR}/prompts/feature-extraction.md" > "${TMPDIR}/step1_template.md"
 
@@ -341,6 +352,7 @@ render_template "${TMPDIR}/step1_template.md" "${TMPDIR}/step1_prompt.md" \
     "RSS_DATA=${TMPDIR}/official_rss.txt" \
     "SITEMAP_NEW_PAGES=${TMPDIR}/sitemap_new_pages.txt" \
     "WEB_SEARCH_QUERIES=${TMPDIR}/web_search_queries.txt" \
+    "PREVIOUS_REPORT=${TMPDIR}/previous_report.txt" \
     "FEATURES_PATH=${TMPDIR}/val_features_path.txt"
 
 log "  Calling claude -p for feature extraction..."
@@ -472,15 +484,7 @@ log "[Step 3] Generating final report..."
 OUTPUT_PATH="${REPORTS_DIR}/src/content/reports/${DATE}-${CHANNEL}.md"
 mkdir -p "$(dirname "$OUTPUT_PATH")"
 
-# 前回レポート取得
-PREV_FILE="$(ls -t "${REPORTS_DIR}/src/content/reports/"*"-${CHANNEL}.md" 2>/dev/null | head -1 || echo "")"
-if [[ -n "${PREV_FILE:-}" && -f "$PREV_FILE" ]]; then
-    log "  Previous report: ${PREV_FILE}"
-    head -c 20000 "$PREV_FILE" > "${TMPDIR}/previous_report.txt"
-else
-    log "  No previous report"
-    echo "(前回レポートなし — 初回生成)" > "${TMPDIR}/previous_report.txt"
-fi
+# 前回レポートは Step 1 で取得済み (${TMPDIR}/previous_report.txt)
 
 # プロンプト構築 (チャネル専用テンプレートがあればそちらを使用)
 STEP3_TEMPLATE="${SYSTEM_DIR}/prompts/trend-research-${CHANNEL}.md"
@@ -535,20 +539,19 @@ log "  Report generated: ${OUTPUT_PATH} (${FILE_SIZE} bytes)"
 ##############################################################################
 
 log "[Step 3.4] Stripping any pre-existing codex_review / codex_importance from frontmatter..."
-awk '
-    BEGIN { c = 0 }
-    /^---$/ { c++; print; next }
-    c == 1 && /^codex_review:[[:space:]]/ { next }
-    c == 1 && /^codex_importance:[[:space:]]/ { next }
-    { print }
-' "$OUTPUT_PATH" > "${OUTPUT_PATH}.tmp" && mv "${OUTPUT_PATH}.tmp" "$OUTPUT_PATH"
+awk -f "${SCRIPT_DIR}/lib/strip-codex-frontmatter.awk" \
+    "$OUTPUT_PATH" > "${OUTPUT_PATH}.tmp" && mv "${OUTPUT_PATH}.tmp" "$OUTPUT_PATH"
 
 ##############################################################################
 # Step 3.5: Codex レビュー (任意 — codex CLI が無ければスキップ)
 ##############################################################################
 
 if command -v codex >/dev/null 2>&1; then
-    log "[Step 3.5] Generating Codex review..."
+    # モデルを明示 pin する。過去事例 (2026-05-20〜22): codex CLI のデフォルトが
+    # gpt-5.2-codex に drift し、ChatGPT account では 400 を返して Codex レビューが
+    # 3日間連続で silent 欠落した。CODEX_MODEL を env で上書き可能にしつつ既定を固定。
+    CODEX_MODEL="${CODEX_MODEL:-gpt-5.4}"
+    log "[Step 3.5] Generating Codex review... (model: ${CODEX_MODEL})"
 
     CODEX_PROMPT="${TMPDIR}/codex_prompt.md"
     awk -v f="$OUTPUT_PATH" '
@@ -561,10 +564,10 @@ if command -v codex >/dev/null 2>&1; then
     ' "${SYSTEM_DIR}/prompts/codex-review.md" > "$CODEX_PROMPT"
 
     CODEX_OUTPUT="${TMPDIR}/codex_output.txt"
-    if codex exec --skip-git-repo-check - < "$CODEX_PROMPT" > "$CODEX_OUTPUT" 2>>"$LOG_FILE"; then
+    if codex exec --model "$CODEX_MODEL" --skip-git-repo-check - < "$CODEX_PROMPT" > "$CODEX_OUTPUT" 2>>"$LOG_FILE"; then
         # ANSI カラー除去 + 外側 { から } までを抽出
         CLEAN_JSON="${TMPDIR}/codex_review.json"
-        sed 's/\x1b\[[0-9;]*m//g' "$CODEX_OUTPUT" | awk '/^\{/,/^\}/' > "$CLEAN_JSON"
+        bash "${SCRIPT_DIR}/lib/extract-codex-json.sh" "$CODEX_OUTPUT" > "$CLEAN_JSON"
 
         if [[ -s "$CLEAN_JSON" ]] && jq empty "$CLEAN_JSON" 2>/dev/null; then
             CODEX_REVIEW_TEXT="$(jq -r '.review // ""' "$CLEAN_JSON")"
@@ -575,18 +578,9 @@ if command -v codex >/dev/null 2>&1; then
 
                 # frontmatter に 2 フィールド注入 (閉じ `---` の直前)
                 REVIEW_ESC="$(printf '%s' "$CODEX_REVIEW_TEXT" | sed 's/"/\\"/g')"
-                awk -v review="$REVIEW_ESC" -v imp="$CODEX_IMP" '
-                    BEGIN { c = 0; injected = 0 }
-                    /^---$/ {
-                        c++
-                        if (c == 2 && !injected) {
-                            print "codex_review: \"" review "\""
-                            if (imp != "") print "codex_importance: " imp
-                            injected = 1
-                        }
-                    }
-                    { print }
-                ' "$OUTPUT_PATH" > "${OUTPUT_PATH}.tmp" && mv "${OUTPUT_PATH}.tmp" "$OUTPUT_PATH"
+                awk -v review="$REVIEW_ESC" -v imp="$CODEX_IMP" \
+                    -f "${SCRIPT_DIR}/lib/inject-codex-review.awk" \
+                    "$OUTPUT_PATH" > "${OUTPUT_PATH}.tmp" && mv "${OUTPUT_PATH}.tmp" "$OUTPUT_PATH"
                 log "  Injected codex_review + codex_importance"
             else
                 record_warning "Step 3.5 (Codexレビュー) で codex exec は成功したが review フィールドが空でした。Codex評価は欠落しています。"
@@ -604,46 +598,62 @@ else
 fi
 
 ##############################################################################
-# Step 3.6: pipeline_warnings 注入 (フォールバック発動時のみ)
+# Step 3.6: QC ゲート (ステイル検知)
 ##############################################################################
 #
-# Step 1/2/3.5 等でフォールバックが発動した場合、レポート閲覧者に
-# 「正常に完了していない可能性があります」を伝えるため、frontmatter に
-# pipeline_warnings 配列を注入する。trend-reports 側の Report.astro が
-# このフィールドを読み取り、上部に警告バナーを表示する。
-# Step 3.5 (Codex) も含めて全フォールバックを拾うため、注入は最後にまとめて行う。
+# 過去事例 (2026-05): Step 3 prompt の「重複は (前回から継続) と注記して残す」
+# 設計と Step 1 が previous_report を見ない問題が重なり、本文の大半が続報で
+# 埋まった「実質的に新規情報なし」のレポートが2週間量産され13件削除した。
+# 再発を生成時点で検知するため、本文の継続表記数と前日 features 重複数を
+# しきい値判定する。ステイル判定時は record_warning で pipeline_warnings に
+# 流し込む (publish は止めず、警告バナーで flag する warn 方式)。
+# pipeline_warnings 注入 (Step 3.7) より前で実行する必要がある。
 
-if [[ -s "$WARNINGS_FILE" ]]; then
-    WARNING_COUNT="$(wc -l < "$WARNINGS_FILE")"
-    log "[Step 3.6] Injecting pipeline_warnings (${WARNING_COUNT} entries)..."
+log "[Step 3.6] Running QC gate (staleness detection)..."
 
-    # frontmatter は最初の `---` で開き、2 番目の `---` で閉じる。
-    # 閉じ `---` の直前に pipeline_warnings ブロックを挿入する。
-    awk -v wf="$WARNINGS_FILE" '
-        BEGIN { c = 0; injected = 0 }
-        /^---$/ {
-            c++
-            if (c == 2 && !injected) {
-                print "pipeline_warnings:"
-                while ((getline line < wf) > 0) {
-                    # YAML ダブルクォートエスケープ: \\ → \\\\, " → \"
-                    gsub(/\\/, "\\\\", line)
-                    gsub(/"/, "\\\"", line)
-                    print "  - \"" line "\""
-                }
-                close(wf)
-                injected = 1
-            }
-        }
-        { print }
-    ' "$OUTPUT_PATH" > "${OUTPUT_PATH}.tmp" && mv "${OUTPUT_PATH}.tmp" "$OUTPUT_PATH"
-    log "  pipeline_warnings injected"
+QC_GATE="${SYSTEM_DIR}/scripts/qc-gate.py"
+QC_OUT="${TMPDIR}/qc_gate.txt"
+if python3 "$QC_GATE" "$OUTPUT_PATH" --reports-dir "$(dirname "$OUTPUT_PATH")" > "$QC_OUT" 2>&1; then
+    log "  QC gate: OK"
 else
-    log "[Step 3.6] No pipeline warnings — skipping injection"
+    qc_ec=$?
+    if [[ "$qc_ec" -eq 2 ]]; then
+        # ステイル判定 — 1行メッセージを pipeline_warnings に流す
+        record_warning "$(cat "$QC_OUT")"
+    else
+        # パースエラー等 (exit 1) — ログだけ残して続行
+        log "  WARNING: QC gate errored (exit ${qc_ec}):"
+        while IFS= read -r line; do log "    | $line"; done < "$QC_OUT"
+    fi
 fi
 
 ##############################################################################
-# Step 3.7: frontmatter YAML 静的解析 (失敗時は claude -p で修正)
+# Step 3.7: pipeline_warnings 注入 (フォールバック発動時のみ)
+##############################################################################
+#
+# Step 1/2/3.5/3.6 等でフォールバックやステイル検知が発動した場合、レポート
+# 閲覧者に「正常に完了していない可能性があります」を伝えるため、frontmatter に
+# pipeline_warnings 配列を注入する。trend-reports 側の Report.astro が
+# このフィールドを読み取り、上部に警告バナーを表示する。
+# Step 3.5 (Codex) / 3.6 (QC) も含めて全フォールバックを拾うため、注入はここで
+# まとめて行う。
+
+if [[ -s "$WARNINGS_FILE" ]]; then
+    WARNING_COUNT="$(wc -l < "$WARNINGS_FILE")"
+    log "[Step 3.7] Injecting pipeline_warnings (${WARNING_COUNT} entries)..."
+
+    # frontmatter は最初の `---` で開き、2 番目の `---` で閉じる。
+    # 閉じ `---` の直前に pipeline_warnings ブロックを挿入する。
+    awk -v wf="$WARNINGS_FILE" \
+        -f "${SCRIPT_DIR}/lib/inject-pipeline-warnings.awk" \
+        "$OUTPUT_PATH" > "${OUTPUT_PATH}.tmp" && mv "${OUTPUT_PATH}.tmp" "$OUTPUT_PATH"
+    log "  pipeline_warnings injected"
+else
+    log "[Step 3.7] No pipeline warnings — skipping injection"
+fi
+
+##############################################################################
+# Step 3.8: frontmatter YAML 静的解析 (失敗時は claude -p で修正)
 ##############################################################################
 #
 # 過去事例 (2026-04-26): Step 3 のClaudeが frontmatter に codex_review を勝手に
@@ -652,7 +662,7 @@ fi
 # 起きないが、引用符・インデント崩れを検出する safety net としてバリデーションを
 # 残してある。
 
-log "[Step 3.7] Validating frontmatter YAML..."
+log "[Step 3.8] Validating frontmatter YAML..."
 
 VALIDATOR="${SYSTEM_DIR}/scripts/validate-frontmatter.py"
 VALIDATE_OUT="${TMPDIR}/frontmatter_validate.txt"
