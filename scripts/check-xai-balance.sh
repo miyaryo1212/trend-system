@@ -86,25 +86,34 @@ log "team_id=${TEAM_ID}"
 
 # --- 2. 残高の取得 ---
 # xAI の符号規約: prepaid クレジット(=残高)は「負の cents」で記録され、消費すると
-# 0 に近づく(0 以上 = 枯渇)。よって 残高(cents) = -1 * val。
+# 0 に近づく(0 以上 = 枯渇)。よって プール(cents) = -1 * val。
 #
-# リアルタイム残高は invoice/preview の coreInvoice.prepaidCredits を採用する。
-#   prepaid/balance.total は月次確定分しか反映されず最大数週間ラグするため不可。
+# リアルタイム残高 = invoice/preview のプール (coreInvoice.prepaidCredits) から
+# 当サイクル(今月)消費 (coreInvoice.prepaidCreditsUsed) を差し引いて求める。
+#   - prepaidCredits 単体は月次でしか動かない (SPEND 計上がサイクル締めのため)。
+#     これだけ見ると月内ずっと不動で実消費を取りこぼす (2026-06 の不具合: $12.82 に固着)。
+#   - prepaid/balance.total も月次確定でラグするためフォールバック専用。
 prev_resp="$(curl -fsS --max-time 20 -H "$AUTH_HEADER" \
     "${MGMT_BASE}/v1/billing/teams/${TEAM_ID}/postpaid/invoice/preview" 2>/dev/null || true)"
 pc="$(jq -r '.coreInvoice.prepaidCredits.val // .prepaidCredits.val // empty' \
     <<<"$prev_resp" 2>/dev/null)"
+# 当サイクル消費 (負値; 例 -535 = $5.35 消費)。欠落時は 0 扱い。
+used="$(jq -r '.coreInvoice.prepaidCreditsUsed.val // 0' <<<"$prev_resp" 2>/dev/null)"
+[[ "$used" =~ ^-?[0-9]+$ ]] || used=0
 
 # フォールバック用に台帳合計も取得 (ラグあり、ログ表示にも使う)
 bal_resp="$(curl -fsS --max-time 20 -H "$AUTH_HEADER" \
     "${MGMT_BASE}/v1/billing/teams/${TEAM_ID}/prepaid/balance" 2>/dev/null || true)"
 ledger="$(jq -r '.total.val // empty' <<<"$bal_resp" 2>/dev/null)"
+# 直近のオートチャージ(PURCHASE)が失敗していないか (枯渇の予兆検知)
+last_topup="$(jq -r '[.changes[]? | select(.changeOrigin=="PURCHASE")] | sort_by(.createTs) | last | .topupStatus // empty' <<<"$bal_resp" 2>/dev/null)"
 
 src="invoice/preview"
 raw="$pc"
 if ! [[ "$raw" =~ ^-?[0-9]+$ ]]; then
     src="prepaid/balance(total,lagging)"
     raw="$ledger"
+    used=0   # フォールバックの台帳合計は当サイクル消費を含まないため差し引かない
 fi
 if ! [[ "$raw" =~ ^-?[0-9]+$ ]]; then
     log "ERROR: 残高をパースできませんでした。preview=${prev_resp:-<none>} balance=${bal_resp:-<none>}"
@@ -112,9 +121,10 @@ if ! [[ "$raw" =~ ^-?[0-9]+$ ]]; then
     exit 1
 fi
 
-remaining_cents=$(( -1 * raw ))
+# 残高 = プール(-1*raw) + 当サイクル消費(used は負値)  例: -1*(-1282) + (-535) = 747 = $7.47
+remaining_cents=$(( -1 * raw + used ))
 usd="$(awk "BEGIN{printf \"%.2f\", ${remaining_cents}/100}")"
-log "remaining=\$${usd} (${remaining_cents}c via ${src}; preview.pc=${pc:-NA} ledger.total=${ledger:-NA}), threshold=\$${THRESHOLD_USD}"
+log "remaining=\$${usd} (${remaining_cents}c via ${src}; pool.pc=${pc:-NA} used=${used} ledger.total=${ledger:-NA} last_topup=${last_topup:-NA}), threshold=\$${THRESHOLD_USD}"
 
 # --- 3. 通知 (Both: 通常はハートビート、閾値未満で警告) ---
 if awk "BEGIN{exit !(${remaining_cents} < ${THRESHOLD_USD}*100)}"; then
@@ -124,4 +134,11 @@ if awk "BEGIN{exit !(${remaining_cents} < ${THRESHOLD_USD}*100)}"; then
 else
     slack ":white_check_mark: xAIクレジット残高: *\$${usd}*"
     log "heartbeat sent"
+fi
+
+# --- 4. オートチャージ失敗の警告 (残高とは独立した予兆アラート) ---
+if [[ "$last_topup" == "FAILED_TO_CHARGE" ]]; then
+    slack ":warning: $(mention)xAI: 直近のクレジット自動チャージが失敗しています (topupStatus=FAILED_TO_CHARGE)
+→ console.x.ai の支払い方法を確認してください"
+    log "WARN: last auto top-up FAILED_TO_CHARGE"
 fi
