@@ -93,7 +93,7 @@ _on_exit() {
     local rc=$?
     rm -rf "$TMPDIR" 2>/dev/null || true
     rm -f "$LOCK_FILE" 2>/dev/null || true
-    if [[ "$rc" -ne 0 && "${DRY_RUN:-false}" != "true" ]]; then
+    if [[ "$rc" -ne 0 && "${DRY_RUN:-false}" != "true" && "${NOTIFIED:-0}" != "1" ]]; then
         notify_slack ":rotating_light: trend-system [${CHANNEL_NAME:-$CHANNEL}] のレポート生成が失敗しました (exit ${rc})。
 よくある原因: Claude認証切れ (orion で \`claude\` を再ログイン) / xAI・Anthropic API障害 / レート制限。
 ログ: logs/${DATE}-${CHANNEL}.log"
@@ -752,7 +752,12 @@ if git diff --cached --quiet; then
     log "  No changes to commit"
 else
     git commit -m "Report: ${CHANNEL_NAME} ${DATE}"
-    git push origin main 2>> "$LOG_FILE" || log "  WARNING: git push failed"
+    if ! git push origin main 2>> "$LOG_FILE"; then
+        NOTIFIED=1
+        notify_slack ":rotating_light: trend-system [${CHANNEL_NAME}] レポートは生成できましたが *git push に失敗* し未公開です (pull --rebase 競合 / ネットワーク等)。ログ: logs/${DATE}-${CHANNEL}.log"
+        log "  ERROR: git push failed — report NOT published"
+        exit 1
+    fi
     log "  Pushed to trend-reports"
 fi
 
