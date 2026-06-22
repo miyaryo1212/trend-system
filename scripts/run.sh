@@ -69,6 +69,37 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
 }
 
+# ---- Slack 通知 (失敗時アラート) ----
+# silent outage 防止: スケジュール実行が失敗したら Slack に即通知する
+# (2026-06: Claude認証切れで5チャンネルが2日間無言で停止した事故の再発防止)。
+# webhook は ~/.claude/slack-webhook (check-xai-balance.sh と共通)。
+notify_slack() {
+    local text="$1"
+    local hook_file="${SLACK_WEBHOOK_FILE:-$HOME/.claude/slack-webhook}"
+    [[ -r "$hook_file" ]] || return 0
+    local hook; hook="$(tr -d '[:space:]' < "$hook_file")"
+    [[ -n "$hook" ]] || return 0
+    local midfile="$HOME/.claude/slack-member-id"
+    if [[ -r "$midfile" ]]; then
+        local mid; mid="$(tr -d '[:space:]' < "$midfile")"
+        [[ -n "$mid" ]] && text="<@${mid}> ${text}"
+    fi
+    curl -fsS --max-time 10 -X POST -H 'Content-Type: application/json' \
+        --data "$(jq -n --arg t "$text" '{text:$t}')" "$hook" >/dev/null 2>&1 || true
+}
+
+# EXIT トラップ: 一時ファイル掃除 + 非ゼロ終了なら Slack 通知。
+_on_exit() {
+    local rc=$?
+    rm -rf "$TMPDIR" 2>/dev/null || true
+    rm -f "$LOCK_FILE" 2>/dev/null || true
+    if [[ "$rc" -ne 0 && "${DRY_RUN:-false}" != "true" ]]; then
+        notify_slack ":rotating_light: trend-system [${CHANNEL_NAME:-$CHANNEL}] のレポート生成が失敗しました (exit ${rc})。
+よくある原因: Claude認証切れ (orion で \`claude\` を再ログイン) / xAI・Anthropic API障害 / レート制限。
+ログ: logs/${DATE}-${CHANNEL}.log"
+    fi
+}
+
 # ---- ロック ----
 
 LOCK_FILE="/tmp/trend-report-${CHANNEL}.lock"
@@ -81,7 +112,7 @@ fi
 # ---- 一時ディレクトリ ----
 
 TMPDIR="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR"; rm -f "$LOCK_FILE"' EXIT
+trap _on_exit EXIT
 
 # ---- パイプライン警告 ----
 # Step ごとにフォールバックが発動した場合、ここに 1 行ずつ追記する。

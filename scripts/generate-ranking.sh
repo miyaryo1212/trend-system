@@ -41,6 +41,31 @@ mkdir -p "$LOG_DIR"
 LOG_FILE="${LOG_DIR}/ranking-$(date +%Y%m%d).log"
 log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG_FILE"; }
 
+# Slack 通知 (失敗時アラート) — silent outage 防止。run.sh と同じ webhook。
+notify_slack() {
+    local text="$1"
+    local hook_file="${SLACK_WEBHOOK_FILE:-$HOME/.claude/slack-webhook}"
+    [[ -r "$hook_file" ]] || return 0
+    local hook; hook="$(tr -d '[:space:]' < "$hook_file")"
+    [[ -n "$hook" ]] || return 0
+    local midfile="$HOME/.claude/slack-member-id"
+    if [[ -r "$midfile" ]]; then
+        local mid; mid="$(tr -d '[:space:]' < "$midfile")"
+        [[ -n "$mid" ]] && text="<@${mid}> ${text}"
+    fi
+    curl -fsS --max-time 10 -X POST -H 'Content-Type: application/json' \
+        --data "$(jq -n --arg t "$text" '{text:$t}')" "$hook" >/dev/null 2>&1 || true
+}
+
+_on_exit() {
+    local rc=$?
+    rm -rf "$TMPDIR" 2>/dev/null || true
+    if [[ "$rc" -ne 0 && "${DRY_RUN:-false}" != "true" ]]; then
+        notify_slack ":rotating_light: trend-system ランキング生成が失敗しました (exit ${rc})。
+よくある原因: Claude認証切れ (orion で \`claude\` を再ログイン) / 候補レポート不足。ログ: logs/ranking-$(date +%Y%m%d).log"
+    fi
+}
+
 log "=== Ranking generation: ${PERIOD_LABEL} ==="
 log "  Reports dir: ${CONTENT_DIR}"
 log "  Output:      ${OUTPUT_FILE}"
@@ -51,7 +76,7 @@ if [[ ! -d "$CONTENT_DIR" ]]; then
 fi
 
 TMPDIR="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR"' EXIT
+trap _on_exit EXIT
 
 ##############################################################################
 # Step 1: 直近4週間のレポートをスキャンしてメタデータ抽出
