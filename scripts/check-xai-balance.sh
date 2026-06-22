@@ -142,3 +142,9 @@ if [[ "$last_topup" == "FAILED_TO_CHARGE" ]]; then
 → console.x.ai の支払い方法を確認してください"
     log "WARN: last auto top-up FAILED_TO_CHARGE"
 fi
+
+# --- 5. Claude 認証ヘルスチェック ---
+# trend-system の全チャンネルは claude -p に依存するため、CH1(06:00) の前に
+# この 05:50 タイマーで認証切れを早期検知する (新規 systemd timer は root が要るため
+# 既設タイマーに相乗りさせている)。失効時は check-claude-auth.sh が Slack 警告する。
+"${SCRIPT_DIR}/check-claude-auth.sh" || true
