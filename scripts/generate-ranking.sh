@@ -215,10 +215,14 @@ fi
 ##############################################################################
 
 # 前回 ranking から slug -> rank のマップを構築 (順位変動の矢印表示用)
+# 既存 ranking.json が空/不正JSONでも PREV_MAP は "{}" を保つこと。空ファイルを
+# jq に渡すと PREV_MAP="" になり、後段の --argjson が落ちて ranking 生成が恒久的に
+# ブロックされる自己増殖バグがあった (2026-06: 0バイト ranking.json を commit して再発)。
 PREV_MAP="{}"
-if [[ -f "$OUTPUT_FILE" ]]; then
+if [[ -s "$OUTPUT_FILE" ]] && jq empty "$OUTPUT_FILE" 2>/dev/null; then
     PREV_MAP="$(jq 'reduce (.items // [])[] as $i ({}; .[$i.slug] = $i.rank)' "$OUTPUT_FILE")"
 fi
+[[ -n "$PREV_MAP" ]] || PREV_MAP="{}"
 
 FINAL_JSON="${TMPDIR}/ranking.json"
 jq --argjson prev "$PREV_MAP" \
@@ -232,6 +236,13 @@ jq --argjson prev "$PREV_MAP" \
        items: [.items[] | . + {previous_rank: ($prev[.slug] // null)}]
      }' \
     "$CLEAN_JSON" > "$FINAL_JSON"
+
+# 空/不正な FINAL_JSON で既存 ranking.json を上書き・commit しないためのガード。
+# (これが無いと jq 失敗時に 0バイトを cp+commit してしまい上記の自己増殖バグを誘発する)
+if [[ ! -s "$FINAL_JSON" ]] || ! jq empty "$FINAL_JSON" 2>/dev/null; then
+    log "ERROR: 最終 ranking JSON の生成に失敗 (PREV_MAP=${PREV_MAP}) — 既存ファイルを保持して中断"
+    exit 1
+fi
 
 log "  Generated ranking:"
 jq -r '.items[] | "    #\(.rank) \(.slug) — \(.reason)"' "$FINAL_JSON" | tee -a "$LOG_FILE"
