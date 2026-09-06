@@ -54,9 +54,11 @@ awk -v f="$REPORT" '
 ' "${SYSTEM_DIR}/prompts/codex-review.md" > "$CODEX_PROMPT"
 
 CODEX_OUTPUT="${TMPDIR_LOCAL}/codex_output.txt"
-# モデル明示 pin (run.sh と同様、デフォルト drift による silent 失敗の防止)
-CODEX_MODEL="${CODEX_MODEL:-gpt-5.4}"
-if ! codex exec --model "$CODEX_MODEL" --skip-git-repo-check - < "$CODEX_PROMPT" > "$CODEX_OUTPUT" 2>>"${LOG_FILE:-/dev/null}"; then
+# モデルは既定で codex 側 (config.toml の model + notice.model_migrations) に委ねる。
+# run.sh と同じ方針 — 固定したいときだけ CODEX_MODEL を env で渡す。
+CODEX_MODEL="${CODEX_MODEL:-}"
+log "  model: ${CODEX_MODEL:-codex default}"
+if ! codex exec ${CODEX_MODEL:+--model "$CODEX_MODEL"} --skip-git-repo-check - < "$CODEX_PROMPT" > "$CODEX_OUTPUT" 2>>"${LOG_FILE:-/dev/null}"; then
     die "codex exec failed"
 fi
 

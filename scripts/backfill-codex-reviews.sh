@@ -106,9 +106,9 @@ for i in "${!TARGETS[@]}"; do
         { print }
     ' "$PROMPT_FILE" > "${TMPDIR}/prompt.md"
 
-    # Codex 実行 (モデル明示 pin — デフォルト drift 防止)
+    # Codex 実行 (既定は codex 側のモデル解決に委ね、CODEX_MODEL があれば pin)
     RAW="${TMPDIR}/raw.txt"
-    if ! codex exec --model "${CODEX_MODEL:-gpt-5.4}" --skip-git-repo-check - < "${TMPDIR}/prompt.md" > "$RAW" 2>>"$LOG_FILE"; then
+    if ! codex exec ${CODEX_MODEL:+--model "$CODEX_MODEL"} --skip-git-repo-check - < "${TMPDIR}/prompt.md" > "$RAW" 2>>"$LOG_FILE"; then
         log "  FAIL: codex exec returned non-zero"
         FAIL_COUNT=$((FAIL_COUNT + 1))
         FAIL_LIST+=("$slug")
@@ -189,7 +189,7 @@ if [[ "$DRY_RUN" != true && "$SUCCESS_COUNT" -gt 0 ]]; then
     else
         git commit -m "Backfill Codex reviews for ${SUCCESS_COUNT} past reports
 
-Codex CLI (gpt-5.4) に過去レポート本文を渡し、review + 独立 importance を
+Codex CLI に過去レポート本文を渡し、review + 独立 importance を
 生成。本文末尾に「※ このレビューは後日生成されました」の但し書きを連結。
 本番 cron (run.sh Step 3.5) は但し書きなしで当日生成。
 
