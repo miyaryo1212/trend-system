@@ -578,11 +578,16 @@ awk -f "${SCRIPT_DIR}/lib/strip-codex-frontmatter.awk" \
 ##############################################################################
 
 if command -v codex >/dev/null 2>&1; then
-    # モデルを明示 pin する。過去事例 (2026-05-20〜22): codex CLI のデフォルトが
-    # gpt-5.2-codex に drift し、ChatGPT account では 400 を返して Codex レビューが
-    # 3日間連続で silent 欠落した。CODEX_MODEL を env で上書き可能にしつつ既定を固定。
-    CODEX_MODEL="${CODEX_MODEL:-gpt-5.4}"
-    log "[Step 3.5] Generating Codex review... (model: ${CODEX_MODEL})"
+    # モデル解決。過去事例 (2026-05-20〜22): codex CLI のデフォルトが gpt-5.2-codex に
+    # drift し 400 で Codex レビューが3日間 silent 欠落 → モデル名をハードコード pin した。
+    # 2026-09-06: 今度は pin していた gpt-5.4 が提供終了して 400。pin は drift を防ぐ
+    # 代わりに「提供終了への追随」を人手に押し付ける、という逆向きの穴があった。
+    # 現在の codex は ~/.codex/config.toml の model を既定に持ち、終了モデルは
+    # [notice.model_migrations] が次世代へ自動読み替えする (5.2-codex→5.4→5.5 の実績あり)。
+    # よって既定ではモデルを渡さず codex 側の解決に委ね、固定したいときだけ
+    # CODEX_MODEL で pin する。失敗時は下の record_warning で警告バナーに出る。
+    CODEX_MODEL="${CODEX_MODEL:-}"
+    log "[Step 3.5] Generating Codex review... (model: ${CODEX_MODEL:-codex default})"
 
     CODEX_PROMPT="${TMPDIR}/codex_prompt.md"
     awk -v f="$OUTPUT_PATH" '
@@ -595,7 +600,7 @@ if command -v codex >/dev/null 2>&1; then
     ' "${SYSTEM_DIR}/prompts/codex-review.md" > "$CODEX_PROMPT"
 
     CODEX_OUTPUT="${TMPDIR}/codex_output.txt"
-    if codex exec --model "$CODEX_MODEL" --skip-git-repo-check - < "$CODEX_PROMPT" > "$CODEX_OUTPUT" 2>>"$LOG_FILE"; then
+    if codex exec ${CODEX_MODEL:+--model "$CODEX_MODEL"} --skip-git-repo-check - < "$CODEX_PROMPT" > "$CODEX_OUTPUT" 2>>"$LOG_FILE"; then
         # ANSI カラー除去 + 外側 { から } までを抽出
         CLEAN_JSON="${TMPDIR}/codex_review.json"
         bash "${SCRIPT_DIR}/lib/extract-codex-json.sh" "$CODEX_OUTPUT" > "$CLEAN_JSON"
