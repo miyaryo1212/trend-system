@@ -13,6 +13,8 @@ set -euo pipefail
 # - frontmatter の閉じ --- 直前に codex_review / codex_importance を注入
 # - 既に codex_review: がある記事はスキップ (冪等)
 # - 失敗した記事はログに記録し処理継続
+# - TREND_REPORTS_DIR で対象の trend-reports clone を指定可 (本番作業ツリーと分けたいとき)
+# - BACKFILL_COMMIT_TRAILER があればコミットメッセージ末尾に付ける
 ##############################################################################
 
 export TZ=Asia/Tokyo
@@ -191,9 +193,9 @@ if [[ "$DRY_RUN" != true && "$SUCCESS_COUNT" -gt 0 ]]; then
 
 Codex CLI に過去レポート本文を渡し、review + 独立 importance を
 生成。本文末尾に「※ このレビューは後日生成されました」の但し書きを連結。
-本番 cron (run.sh Step 3.5) は但し書きなしで当日生成。
+本番 cron (run.sh Step 3.5) は但し書きなしで当日生成。${BACKFILL_COMMIT_TRAILER:+
 
-Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>" >> "$LOG_FILE" 2>&1
+${BACKFILL_COMMIT_TRAILER}}" >> "$LOG_FILE" 2>&1
 
         log "  git pull --rebase origin main (safety)"
         git pull --rebase origin main >> "$LOG_FILE" 2>&1 || {
