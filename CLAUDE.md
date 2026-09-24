@@ -4,10 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## プロジェクト概要
 
-Ubuntu Server上でClaude Code (`claude -p`) をsystemd timerで定期実行し、生成AI関連のトレンド情報を収集→Markdownレポート化→Astro + Netlifyで公開するシステム。
+Ubuntu Server上でClaude Code (`claude -p`) をsystemd timerで定期実行し、生成AI関連のトレンド情報を収集→Markdownレポート化→Astro + Cloudflare Pagesで公開するシステム。
 
 - **trend-system** (このリポジトリ, public): 実行スクリプト、プロンプト、設定
-- **trend-reports** (別リポジトリ, public): Astroプロジェクト。生成されたMarkdownレポートを格納し、GitHub Actions → Netlifyでデプロイ
+- **trend-reports** (別リポジトリ, public): Astroプロジェクト。生成されたMarkdownレポートを格納し、push を Cloudflare Pages が検知してビルド・デプロイ
 
 公開URL: `https://aitrends.miyaryo1212.com` (Cloudflare経由)
 
@@ -42,7 +42,7 @@ systemd timer → scripts/run.sh <channel-id>
   │    - チャネル専用テンプレートがあればそちらを優先
   │    → trend-reports/src/content/reports/YYYY-MM-DD-channel.md
   │
-  └→ [Step 4] git push → GitHub Actions → Astro build → Netlify deploy
+  └→ [Step 4] git push → Cloudflare Pages (Astro build → deploy)
 ```
 
 ### チャネル構成
@@ -116,7 +116,7 @@ XAI_API_KEY="xai-..."
 - Ubuntu Server 24.04 LTS / Ryzen 7 PRO 6850H / 32GB
 - Claude Max 5x Plan (OAuth認証)
 - 必須パッケージ: git, curl, jq, yq, Node.js v20 LTS
-- Node.js 22はGitHub Actions上のみ (Astroビルド用)
+- Astroビルドは Cloudflare Pages 側で実行 (サーバーではビルドしない)
 
 ## 開発上の注意
 
