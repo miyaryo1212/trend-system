@@ -19,7 +19,7 @@ export TZ=Asia/Tokyo
 # Pipeline:
 #   Step 0:   RSSフィード取得 (curl)
 #   Step 1:   新機能・トピック抽出 (claude -p, コスト$0)
-#   Step 2:   機能ごとにX検索 (Grok x_search, ~$0.02/機能)
+#   Step 2:   機能ごとにX検索 (Grok x_search, 上位 max_features 件のみ, ~$0.04/機能)
 #   Step 3:   最終レポート生成 (claude -p, コスト$0)
 #   Step 3.4: Step 3 が前回参照で複製した codex_review/codex_importance を剥がす
 #   Step 3.5: Codex レビュー注入 (codex exec, サブスク枠内, 任意)
@@ -426,11 +426,29 @@ else
     PROMPT_TEMPLATE="$(yq -r ".channels.${CHANNEL}.x_search.prompt_template" "$CONFIG_FILE")"
     WEEK_AGO="$(date -d '7 days ago' +%Y-%m-%d)"
 
+    # 2026-09-21 から x_search は「取得post数」課金 ($5/1k posts, dedup なし, issue #8)。
+    # 放っておくと Grok が1機能あたり2-3回検索して10-20 post 取得し $0.09-0.11/機能 になる。
+    # 「1回だけ・6件以下」の指示で $0.04/機能 (6 posts) まで落ちる (2026-09-25 実測)。
+    # 加えて Step 1 の重要度順で上位 max_features 件だけ検索する (残りは RSS 事実のみ)。
+    X_MAX_FEATURES="$(yq -r ".channels.${CHANNEL}.x_search.max_features // 6" "$CONFIG_FILE")"
+    X_SEARCH_CONSTRAINT="
+制約 (コスト上限、厳守): x_search ツールの呼び出しは1回だけ、取得件数 (limit) は6件以下にすること。
+再検索・スレッド取得・引用元や親投稿の追跡はしない。取得できた投稿だけで要約すること。"
+    x_count=0
+    x_posts_total=0
+    x_ticks_total=0
+
     # features.txtの各行を処理
     while IFS= read -r line; do
         # "- 機能名: 説明" の形式をパース
         line="$(echo "$line" | sed 's/^[[:space:]]*-[[:space:]]*//')"
         [[ -z "$line" ]] && continue
+
+        if (( x_count >= X_MAX_FEATURES )); then
+            log "  X search: cap ${X_MAX_FEATURES} reached, skipping: ${line%%:*}"
+            continue
+        fi
+        x_count=$((x_count + 1))
 
         FEATURE_NAME="${line%%:*}"
         FEATURE_DESC="${line#*: }"
@@ -442,6 +460,7 @@ else
         search_prompt="${PROMPT_TEMPLATE}"
         search_prompt="${search_prompt//\{\{FEATURE_NAME\}\}/$FEATURE_NAME}"
         search_prompt="${search_prompt//\{\{FEATURE_DESCRIPTION\}\}/$FEATURE_DESC}"
+        search_prompt+="${X_SEARCH_CONSTRAINT}"
 
         response="$(curl -s --max-time 60 https://api.x.ai/v1/responses \
             -H "Content-Type: application/json" \
@@ -458,6 +477,14 @@ else
 
         text=""
         if [[ -n "$response" ]]; then
+            # 課金の実測値を記録 (cost_in_usd_ticks は 1e-10 USD 単位)
+            read -r x_calls x_posts x_ticks < <(echo "$response" | jq -r \
+                '[.usage.server_side_tool_usage_details.x_search_calls // 0,
+                  .usage.server_side_tool_usage_details.x_posts_fetched // 0,
+                  .usage.cost_in_usd_ticks // 0] | @tsv' 2>/dev/null || echo "0 0 0") || true
+            x_posts_total=$((x_posts_total + ${x_posts:-0}))
+            x_ticks_total=$((x_ticks_total + ${x_ticks:-0}))
+            log "    usage: x_search_calls=${x_calls:-?} x_posts_fetched=${x_posts:-?} cost=\$$(awk -v t="${x_ticks:-0}" 'BEGIN{printf "%.4f", t/1e10}')"
             text="$(echo "$response" | jq -r \
                 '.output[] | select(.type=="message") | .content[] | select(.type=="output_text") | .text' \
                 2>/dev/null || echo "")"
@@ -473,6 +500,7 @@ else
 ${text}
 "
     done < "$FEATURES_PATH"
+    log "  X search total: requests=${x_count} x_posts_fetched=${x_posts_total} cost=\$$(awk -v t="$x_ticks_total" 'BEGIN{printf "%.4f", t/1e10}')"
 fi
 
 echo "$X_SEARCH_RESULTS" > "${TMPDIR}/x_search_results.txt"
