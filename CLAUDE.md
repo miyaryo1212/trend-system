@@ -6,10 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Ubuntu Server上でClaude Code (`claude -p`) をsystemd timerで定期実行し、生成AI関連のトレンド情報を収集→Markdownレポート化→Astro + Netlifyで公開するシステム。
 
-- **trend-system** (このリポジトリ, private): 実行スクリプト、プロンプト、設定
-- **trend-reports** (別リポジトリ, private): Astroプロジェクト。生成されたMarkdownレポートを格納し、GitHub Actions → Netlifyでデプロイ
+- **trend-system** (このリポジトリ, public): 実行スクリプト、プロンプト、設定
+- **trend-reports** (別リポジトリ, public): Astroプロジェクト。生成されたMarkdownレポートを格納し、GitHub Actions → Netlifyでデプロイ
 
 公開URL: `https://aitrends.miyaryo1212.com` (Cloudflare経由)
+
+両リポジトリとも public。秘密情報 (APIキー・Webhook 等) は `.env.local` / `~/.env.agent` に置き、コミットしないこと。
+main は ruleset `protect-main` で保護 (削除・force push 禁止、PR 必須)。repo admin は常に bypass できるため、本人と denebola のパイプラインからの直接 push はそのまま通る。
 
 ## アーキテクチャ
 
