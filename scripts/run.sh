@@ -95,7 +95,7 @@ _on_exit() {
     rm -f "$LOCK_FILE" 2>/dev/null || true
     if [[ "$rc" -ne 0 && "${DRY_RUN:-false}" != "true" && "${NOTIFIED:-0}" != "1" ]]; then
         notify_slack ":rotating_light: trend-system [${CHANNEL_NAME:-$CHANNEL}] のレポート生成が失敗しました (exit ${rc})。
-よくある原因: Claude認証切れ (orion で \`claude\` を再ログイン) / xAI・Anthropic API障害 / レート制限。
+よくある原因: Claude認証切れ ($(hostname -s) で \`claude\` を再ログイン) / xAI・Anthropic API障害 / レート制限。
 ログ: logs/${DATE}-${CHANNEL}.log"
     fi
 }

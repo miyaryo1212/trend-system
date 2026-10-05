@@ -16,6 +16,7 @@ export TZ=Asia/Tokyo
 WEBHOOK_FILE="${SLACK_WEBHOOK_FILE:-$HOME/.claude/slack-webhook}"
 MID_FILE="$HOME/.claude/slack-member-id"
 CRED="$HOME/.claude/.credentials.json"
+HOST_S="$(hostname -s)"
 
 log() { printf '%s %s\n' "$(date '+%F %T')" "$*"; }
 
@@ -40,7 +41,7 @@ CLAUDE_BIN="$(command -v claude || true)"
 [[ -z "$CLAUDE_BIN" && -x "$HOME/.local/bin/claude" ]] && CLAUDE_BIN="$HOME/.local/bin/claude"
 if [[ -z "$CLAUDE_BIN" ]]; then
     log "ERROR: claude binary not found"
-    slack ":warning: $(mention)Claude認証監視: claude バイナリが見つかりません (orion)。"
+    slack ":warning: $(mention)Claude認証監視: claude バイナリが見つかりません (${HOST_S})。"
     exit 0
 fi
 
@@ -48,8 +49,8 @@ fi
 PROBE="$(printf 'reply with: ok' | timeout 60 "$CLAUDE_BIN" -p 2>&1 || true)"
 if printf '%s' "$PROBE" | grep -qiE 'authentication_error|Invalid authentication credentials|Failed to authenticate|\b401\b'; then
     log "AUTH FAILED: ${PROBE:0:200}"
-    slack ":rotating_light: $(mention)Claude Code の認証が切れています (orion)。このままだと trend-system の全チャンネル(06:00〜)が停止します。
-→ orion で \`claude\` を起動し \`/login\` で再ログインしてください。"
+    slack ":rotating_light: $(mention)Claude Code の認証が切れています (${HOST_S})。このままだと trend-system の全チャンネル(06:00〜)が停止します。
+→ ${HOST_S} で \`claude\` を起動し \`/login\` で再ログインしてください。"
     exit 0
 fi
 
