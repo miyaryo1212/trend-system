@@ -106,10 +106,11 @@ render_template "$STEP3_TEMPLATE" "${TMPDIR_LOCAL}/step3_prompt.md" \
     "PREVIOUS_REPORT=${PREV_PATH}"
 
 log "[03-report] Calling claude -p..."
-claude -p \
-    --max-turns 15 \
+# run.sh Step 3 と同じ: ターン上限 30 (STEP3_MAX_TURNS)、作業ディレクトリは repo の外
+(cd "$TMPDIR_LOCAL" && claude -p \
+    --max-turns "${STEP3_MAX_TURNS:-30}" \
     --allowedTools "Read" "Write" "Bash(curl:*)" "WebSearch" "WebFetch" \
-    < "${TMPDIR_LOCAL}/step3_prompt.md" \
+    < "${TMPDIR_LOCAL}/step3_prompt.md") \
     2>&1 | { if [[ -n "${LOG_FILE:-}" ]]; then tee -a "$LOG_FILE"; else cat; fi; }
 
 [[ -f "$OUTPUT_PATH" ]] || die "Report file was not created at ${OUTPUT_PATH}"

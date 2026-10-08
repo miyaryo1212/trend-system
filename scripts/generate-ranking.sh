@@ -61,8 +61,11 @@ _on_exit() {
     local rc=$?
     rm -rf "$TMPDIR" 2>/dev/null || true
     if [[ "$rc" -ne 0 && "${DRY_RUN:-false}" != "true" ]]; then
+        local last_err
+        last_err="$(grep -aE '^Error:|ERROR' "$LOG_FILE" 2>/dev/null | tail -n1 | cut -c1-300)" || true
         notify_slack ":rotating_light: trend-system ランキング生成が失敗しました (exit ${rc})。
-よくある原因: Claude認証切れ (orion で \`claude\` を再ログイン) / 候補レポート不足。ログ: logs/ranking-$(date +%Y%m%d).log"
+直前のエラー: ${last_err:-(ログに記録なし)}
+ログ: logs/ranking-$(date +%Y%m%d).log"
     fi
 }
 
