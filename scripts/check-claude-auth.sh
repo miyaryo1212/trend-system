@@ -9,6 +9,10 @@
 #
 # 通常は check-xai-balance.sh (05:50 timer) の末尾から呼ばれる。単体実行も可。
 # 任意環境変数: SLACK_WEBHOOK_FILE (default ~/.claude/slack-webhook)
+#              AUTH_WARN_DAYS (default 5) — refresh token 失効の何日前から予告するか
+#
+# /login のトークンは refreshTokenExpiresAt (約30日) でハード失効し、使っても延びない
+# (2026-09-04, 10-05 に実際に失効)。probe が通っていても期限が近ければ毎朝予告する。
 ##############################################################################
 set -uo pipefail
 export TZ=Asia/Tokyo
@@ -16,6 +20,8 @@ export TZ=Asia/Tokyo
 WEBHOOK_FILE="${SLACK_WEBHOOK_FILE:-$HOME/.claude/slack-webhook}"
 MID_FILE="$HOME/.claude/slack-member-id"
 CRED="$HOME/.claude/.credentials.json"
+HOST_S="$(hostname -s)"
+WARN_DAYS="${AUTH_WARN_DAYS:-5}"
 
 log() { printf '%s %s\n' "$(date '+%F %T')" "$*"; }
 
@@ -40,7 +46,7 @@ CLAUDE_BIN="$(command -v claude || true)"
 [[ -z "$CLAUDE_BIN" && -x "$HOME/.local/bin/claude" ]] && CLAUDE_BIN="$HOME/.local/bin/claude"
 if [[ -z "$CLAUDE_BIN" ]]; then
     log "ERROR: claude binary not found"
-    slack ":warning: $(mention)Claude認証監視: claude バイナリが見つかりません (orion)。"
+    slack ":warning: $(mention)Claude認証監視: claude バイナリが見つかりません (${HOST_S})。"
     exit 0
 fi
 
@@ -48,8 +54,8 @@ fi
 PROBE="$(printf 'reply with: ok' | timeout 60 "$CLAUDE_BIN" -p 2>&1 || true)"
 if printf '%s' "$PROBE" | grep -qiE 'authentication_error|Invalid authentication credentials|Failed to authenticate|\b401\b'; then
     log "AUTH FAILED: ${PROBE:0:200}"
-    slack ":rotating_light: $(mention)Claude Code の認証が切れています (orion)。このままだと trend-system の全チャンネル(06:00〜)が停止します。
-→ orion で \`claude\` を起動し \`/login\` で再ログインしてください。"
+    slack ":rotating_light: $(mention)Claude Code の認証が切れています (${HOST_S})。このままだと trend-system の全チャンネル(06:00〜)が停止します。
+→ ${HOST_S} で \`claude\` を起動し \`/login\` で再ログインしてください。"
     exit 0
 fi
 
@@ -65,4 +71,17 @@ if [[ -r "$CRED" ]]; then
     fi
 else
     log "auth OK (probe passed; no credentials file)"
+fi
+
+# --- refresh token のハード失効を予告 ---
+RT_EXP_MS="$(jq -r '.claudeAiOauth.refreshTokenExpiresAt // empty' "$CRED" 2>/dev/null)"
+if [[ "$RT_EXP_MS" =~ ^[0-9]+$ ]]; then
+    left_s=$(( RT_EXP_MS / 1000 - $(date +%s) ))
+    left_d=$(( left_s / 86400 ))
+    exp_at="$(date -d "@$(( RT_EXP_MS / 1000 ))" '+%m/%d %H:%M')"
+    log "refresh token expires at ${exp_at} (~${left_d}d)"
+    if (( left_s < WARN_DAYS * 86400 )); then
+        slack ":hourglass_flowing_sand: $(mention)Claude Code のログインがあと ${left_d} 日 (${exp_at}) で切れます (${HOST_S})。切れると trend-system の全チャンネルが停止します。
+→ ${HOST_S} で \`claude\` を起動し \`/login\` で再ログインしてください。"
+    fi
 fi

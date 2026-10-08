@@ -62,7 +62,7 @@ _on_exit() {
     rm -rf "$TMPDIR" 2>/dev/null || true
     if [[ "$rc" -ne 0 && "${DRY_RUN:-false}" != "true" ]]; then
         notify_slack ":rotating_light: trend-system ランキング生成が失敗しました (exit ${rc})。
-よくある原因: Claude認証切れ (orion で \`claude\` を再ログイン) / 候補レポート不足。ログ: logs/ranking-$(date +%Y%m%d).log"
+よくある原因: Claude認証切れ ($(hostname -s) で \`claude\` を再ログイン) / 候補レポート不足。ログ: logs/ranking-$(date +%Y%m%d).log"
     fi
 }
 
