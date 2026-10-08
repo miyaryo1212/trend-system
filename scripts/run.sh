@@ -88,6 +88,16 @@ notify_slack() {
         --data "$(jq -n --arg t "$text" '{text:$t}')" "$hook" >/dev/null 2>&1 || true
 }
 
+# ログ中の最後のエラー行 (claude -p の "Error: Reached max turns" や log の "ERROR:")。
+# 通知に原因を推測で書くと誤診を招く (2026-10-09: max turns 到達を認証切れと誤認) ので、
+# 実際のエラー行をそのまま載せる。
+last_error_line() {
+    local f="$1" line
+    line="$(grep -aE '^Error:|ERROR' "$f" 2>/dev/null | tail -n1 | cut -c1-300)" || true
+    [[ -n "$line" ]] || line="$(tail -n1 "$f" 2>/dev/null | cut -c1-300)" || true
+    echo "${line:-(ログに記録なし)}"
+}
+
 # EXIT トラップ: 一時ファイル掃除 + 非ゼロ終了なら Slack 通知。
 _on_exit() {
     local rc=$?
@@ -95,7 +105,7 @@ _on_exit() {
     rm -f "$LOCK_FILE" 2>/dev/null || true
     if [[ "$rc" -ne 0 && "${DRY_RUN:-false}" != "true" && "${NOTIFIED:-0}" != "1" ]]; then
         notify_slack ":rotating_light: trend-system [${CHANNEL_NAME:-$CHANNEL}] のレポート生成が失敗しました (exit ${rc})。
-よくある原因: Claude認証切れ (orion で \`claude\` を再ログイン) / xAI・Anthropic API障害 / レート制限。
+直前のエラー: $(last_error_line "$LOG_FILE")
 ログ: logs/${DATE}-${CHANNEL}.log"
     fi
 }
@@ -113,6 +123,19 @@ fi
 
 TMPDIR="$(mktemp -d)"
 trap _on_exit EXIT
+
+# claude -p (Step 1/3) の作業ディレクトリ。repo 直下で動かすと、モデルが curl -o で
+# 落とした一時ファイル (.f_*.txt 等) が repo に溜まり、開発用 CLAUDE.md も読み込まれる。
+# チャネルごとに固定 (毎回 mktemp だと ~/.claude/projects に project が増え続ける) し、
+# 実行のたびに空にする。出力・入力ファイルはすべて絶対パスで渡しているので影響しない。
+CLAUDE_WORKDIR="${XDG_CACHE_HOME:-$HOME/.cache}/trend-system/claude-work-${CHANNEL}"
+rm -rf "$CLAUDE_WORKDIR"
+mkdir -p "$CLAUDE_WORKDIR"
+
+# Step 3 (レポート生成) のターン上限。openai.com が WebFetch に 403 を返す日は
+# curl で 1 本ずつ読み直すため 15 では足りず、ファイルを書く前に打ち切られていた
+# (2026-05〜10 に 45 回、主に codex-openai / ai-trends)。
+STEP3_MAX_TURNS="${STEP3_MAX_TURNS:-30}"
 
 # ---- パイプライン警告 ----
 # Step ごとにフォールバックが発動した場合、ここに 1 行ずつ追記する。
@@ -387,11 +410,11 @@ render_template "${TMPDIR}/step1_template.md" "${TMPDIR}/step1_prompt.md" \
     "FEATURES_PATH=${TMPDIR}/val_features_path.txt"
 
 log "  Calling claude -p for feature extraction..."
-claude -p \
+(cd "$CLAUDE_WORKDIR" && claude -p \
     --max-turns 20 \
     --allowedTools "Read" "Write" "Bash(curl:*)" "WebSearch" "WebFetch" \
     < "${TMPDIR}/step1_prompt.md" \
-    2>> "$LOG_FILE" || true
+    2>> "$LOG_FILE") || true
 
 # features.txtが生成されたか確認
 if [[ ! -f "$FEATURES_PATH" ]]; then
@@ -568,12 +591,13 @@ render_template "${TMPDIR}/step3_template.md" "${TMPDIR}/step3_prompt.md" \
     "COMMUNITY_RSS=${TMPDIR}/community_rss.txt" \
     "PREVIOUS_REPORT=${TMPDIR}/previous_report.txt"
 
-log "  Calling claude -p for report generation..."
-claude -p \
-    --max-turns 15 \
+log "  Calling claude -p for report generation... (max turns: ${STEP3_MAX_TURNS})"
+# stdout もチャネルログへ: 失敗時の "Error: Reached max turns" 等を通知に載せるため
+(cd "$CLAUDE_WORKDIR" && claude -p \
+    --max-turns "$STEP3_MAX_TURNS" \
     --allowedTools "Read" "Write" "Bash(curl:*)" "WebSearch" "WebFetch" \
     < "${TMPDIR}/step3_prompt.md" \
-    2>> "$LOG_FILE"
+    >> "$LOG_FILE" 2>&1)
 
 # 出力確認
 if [[ ! -f "$OUTPUT_PATH" ]]; then
